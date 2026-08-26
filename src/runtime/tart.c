@@ -101,7 +101,6 @@ void ta_rt_gc_stats(int64_t *collections, int64_t *bytes_in_use) {
     if (bytes_in_use) *bytes_in_use = (int64_t)gc_in_use;
 }
 
-static void gc_mark_block(void *user);
 static void gc_trace_object(TaGcHead *h);
 
 static void gc_release_user(void *user) {
@@ -117,33 +116,80 @@ static void gc_release_user(void *user) {
     }
 }
 
+/* ---- O(1) pointer -> object lookup table ----
+   Rebuilt once per collection (O(objects)). Every candidate-pointer check
+   that used to be a linear O(objects) walk of gc_objects becomes an O(1)
+   probe here, removing the quadratic blowup that made collection impossible
+   once the heap held hundreds of thousands of live objects. */
+static TaGcHead **gc_table = NULL;
+static size_t gc_table_cap = 0;
+
+static size_t gc_hash_ptr(uintptr_t k, size_t cap) {
+    k ^= k >> 33;
+    k *= 0xff51afd7ed558ccdULL;
+    k ^= k >> 33;
+    k *= 0xc4ceb9fe1a85ec53ULL;
+    k ^= k >> 33;
+    return k & (cap - 1);
+}
+
+static void gc_table_build(void) {
+    size_t n = 0;
+    for (TaGcHead *h = gc_objects; h; h = h->next) n++;
+    size_t cap = 16;
+    while (cap < n * 2) cap *= 2;
+    gc_table_cap = cap;
+    gc_table = malloc(cap * sizeof(TaGcHead *));
+    for (size_t i = 0; i < cap; i++) gc_table[i] = NULL;
+    for (TaGcHead *h = gc_objects; h; h = h->next) {
+        uintptr_t key = (uintptr_t)((char *)h + TA_GC_HDR);
+        size_t idx = gc_hash_ptr(key, cap);
+        while (gc_table[idx]) idx = (idx + 1) & (cap - 1);
+        gc_table[idx] = h;
+    }
+}
+
+static TaGcHead *gc_table_find(void *user) {
+    if (!gc_table) return NULL;
+    uintptr_t key = (uintptr_t)user;
+    size_t idx = gc_hash_ptr(key, gc_table_cap);
+    while (gc_table[idx]) {
+        TaGcHead *h = gc_table[idx];
+        if ((uintptr_t)((char *)h + TA_GC_HDR) == key) return h;
+        idx = (idx + 1) & (gc_table_cap - 1);
+    }
+    return NULL;
+}
+
+/* ---- mark worklist ----
+   Instead of recursing (C-stack risk on deep object graphs) or re-walking
+   the whole object list to a fixpoint (O(objects^2)), newly-marked objects
+   are pushed onto a worklist and drained iteratively. Each object is traced
+   exactly once, so total mark work is O(live objects + live bytes). */
+static TaGcHead **gc_wl = NULL;
+static size_t gc_wl_len = 0, gc_wl_cap = 0;
+
+static void gc_wl_push(TaGcHead *h) {
+    if (gc_wl_len == gc_wl_cap) {
+        gc_wl_cap = gc_wl_cap ? gc_wl_cap * 2 : 256;
+        gc_wl = realloc(gc_wl, gc_wl_cap * sizeof(TaGcHead *));
+    }
+    gc_wl[gc_wl_len++] = h;
+}
+
+static void gc_scan_pointer(void *cand) {
+    if (!cand) return;
+    TaGcHead *h = gc_table_find(cand);
+    if (!h || h->marked) return;
+    h->marked = 1;
+    gc_wl_push(h);
+}
+
 static void gc_scan_range(const char *lo, const char *hi) {
     for (const char *p = lo; p + sizeof(void *) <= hi; p += sizeof(void *)) {
         void *cand;
         memcpy(&cand, p, sizeof(cand));
-        if (!cand) continue;
-        /* fast reject: only heap-ish addresses matter at toy scale we walk */
-        for (TaGcHead *h = gc_objects; h; h = h->next)
-            if ((char *)h + TA_GC_HDR == (char *)cand) {
-                if (!h->marked) {
-                    h->marked = 1;
-                    gc_mark_block(cand);
-                }
-                break;
-            }
-    }
-}
-
-static void gc_mark_block(void *user) {
-    if (!user) return;
-    for (TaGcHead *h = gc_objects; h; h = h->next) {
-        if ((char *)h + TA_GC_HDR == (char *)user) {
-            if (!h->marked) {
-                h->marked = 1;
-                gc_trace_object(h);
-            }
-            return;
-        }
+        gc_scan_pointer(cand);
     }
 }
 
@@ -156,9 +202,9 @@ static void gc_trace_object(TaGcHead *h) {
                           (const char *)&l->cells[i] + 8);
     } else if (h->type == 3) {
         TaRtDict *d = (TaRtDict *)u;
-        gc_mark_block(d->state);
-        gc_mark_block(d->keys);
-        gc_mark_block(d->vals);
+        gc_scan_pointer(d->state);
+        gc_scan_pointer(d->keys);
+        gc_scan_pointer(d->vals);
         if (d->state && d->keys && d->vals) {
             for (int64_t i = 0; i < d->cap; i++) {
                 if (!d->state[i]) continue;
@@ -188,26 +234,19 @@ static void gc_collect_inner(const char *why) {
        never seen as a whole pointer (silently missing live roots). */
     lo = (const char *)((uintptr_t)lo & ~(uintptr_t)7);
     hi = (const char *)(((uintptr_t)hi + 7) & ~(uintptr_t)7);
+    /* Build the O(1) lookup table once, then reset the mark worklist. */
+    gc_table_build();
+    gc_wl = NULL; gc_wl_len = 0; gc_wl_cap = 0;
+
+    /* Scan roots: stack frames + callee-saved registers. */
     gc_scan_range(lo, hi);
     gc_scan_range((const char *)regs, (const char *)regs + sizeof(jmp_buf));
 
-    /* fixpoint trace of marked containers.
-       Conservative scanning can surface a new root mid-traversal, and a
-       container marked later must still have its children walked, so we
-       repeat until the live set is stable. */
-    bool changed = true;
-    while (changed) {
-        changed = false;
-        for (TaGcHead *h = gc_objects; h; h = h->next) {
-            if (!h->marked || h->type < 2) continue;
-            size_t live_before = 0;
-            for (TaGcHead *q = gc_objects; q; q = q->next) live_before += q->marked;
-            gc_trace_object(h);
-            size_t live_after = 0;
-            for (TaGcHead *q = gc_objects; q; q = q->next) live_after += q->marked;
-            if (live_after != live_before) changed = true;
-        }
-    }
+    /* Drain the worklist: every marked object is traced exactly once.
+       This replaces the old O(objects^2) fixpoint re-scan with O(live
+       objects + live bytes) marking. */
+    for (size_t i = 0; i < gc_wl_len; i++)
+        gc_trace_object(gc_wl[i]);
 
     {
         static int dbg = -1;
@@ -242,6 +281,9 @@ static void gc_collect_inner(const char *why) {
     if (gc_stats_env)
         fprintf(stderr, "[ta-gc] %s: %zu bytes live after collect #%lld\n",
                 why, gc_in_use, (long long)gc_collections);
+
+    free(gc_table); gc_table = NULL; gc_table_cap = 0;
+    free(gc_wl); gc_wl = NULL; gc_wl_len = gc_wl_cap = 0;
 }
 
 void ta_rt_gc_collect(void) { gc_collect_inner("manual"); }
