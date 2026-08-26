@@ -1,6 +1,9 @@
 #include "ta_lexer.h"
 #include "ta_utf8.h"
 
+#include <errno.h>
+#include <math.h>
+
 typedef struct {
     const char *src;
     size_t len;
@@ -221,6 +224,7 @@ static void finalize_eof(Lexer *lx) {
         lex_error(lx, TA_ERR_PARSE + 5, lx->line, lx->col,
                   "மூடப்படாத அடைப்புக்குறி உள்ளது",
                   "'(' , '[' , '{' அனைத்திற்கும் இணையான மூடும் குறிகள் தேவை");
+        lx->incomplete = true;
     }
     if (lx->line_has_tokens && lx->paren_depth == 0) {
         enqueue(lx, mk_tok(TK_NEWLINE, lx->line, lx->col));
@@ -305,7 +309,7 @@ static void lex_string(Lexer *lx) {
         if (lx->pos >= lx->len || lx_byte(lx) == '\n') {
             lex_error(lx, TA_ERR_LEX + 2, sline, scol, "முடிக்கப்படாத சரம் (string)",
                       "சரத்தின் இரு முனைகளிலும் '\"' இருக்க வேண்டும்");
-            lx->incomplete = false;
+            lx->incomplete = true;
             break;
         }
         if (lx_byte(lx) == '"') {
@@ -394,7 +398,14 @@ static void lex_number(Lexer *lx) {
             lex_error(lx, TA_ERR_LEX + 4, sline, scol, "தவறான எண்",
                       "'0x' க்குப் பிறகு குறைந்தது ஒரு hex இலக்கம் தேவை");
         }
+        errno = 0;
         long long val = ndig ? strtoll(sb.data, NULL, 16) : 0;
+        if (ndig && errno == ERANGE) {
+            ta_sb_free(&sb);
+            lex_error(lx, TA_ERR_LEX + 4, sline, scol, "எண் எல்லை மீறியது",
+                      "முழுஎண் வரம்பை விட பெரிய hex எண்");
+            return;
+        }
         ta_sb_free(&sb);
         TaToken tk = mk_tok(TK_INT, sline, scol);
         tk.v.i = val;
@@ -422,7 +433,14 @@ static void lex_number(Lexer *lx) {
             lex_error(lx, TA_ERR_LEX + 4, sline, scol, "தவறான எண்",
                       "'0b' க்குப் பிறகு குறைந்தது ஒரு பைனரி இலக்கம் தேவை");
         }
+        errno = 0;
         long long val = ndig ? strtoll(sb.data, NULL, 2) : 0;
+        if (ndig && errno == ERANGE) {
+            ta_sb_free(&sb);
+            lex_error(lx, TA_ERR_LEX + 4, sline, scol, "எண் எல்லை மீறியது",
+                      "முழுஎண் வரம்பை விட பெரிய binary எண்");
+            return;
+        }
         ta_sb_free(&sb);
         TaToken tk = mk_tok(TK_INT, sline, scol);
         tk.v.i = val;
@@ -484,9 +502,23 @@ static void lex_number(Lexer *lx) {
 
     TaToken tk = mk_tok(is_float ? TK_FLOAT : TK_INT, sline, scol);
     if (is_float) {
+        errno = 0;
         tk.v.f = strtod(sb.data, NULL);
+        if (errno == ERANGE && !isfinite(tk.v.f)) {
+            ta_sb_free(&sb);
+            lex_error(lx, TA_ERR_LEX + 4, sline, scol, "எண் எல்லை மீறியது",
+                      "மிதவிழிப்பு எண் வரம்பை விட பெரியது");
+            return;
+        }
     } else {
+        errno = 0;
         tk.v.i = strtoll(sb.data, NULL, 10);
+        if (errno == ERANGE) {
+            ta_sb_free(&sb);
+            lex_error(lx, TA_ERR_LEX + 4, sline, scol, "எண் எல்லை மீறியது",
+                      "முழுஎண் வரம்பை விட பெரிய எண்");
+            return;
+        }
     }
     ta_sb_free(&sb);
     enqueue(lx, tk);

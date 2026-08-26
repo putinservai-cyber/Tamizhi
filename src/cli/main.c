@@ -346,7 +346,6 @@ static int cmd_repl(const char *argv0) {
         char *obj = find_runtime_obj(argv0);
         if (!obj) {
             fprintf(stderr, "TA6004: tart.o கிடைக்கவில்லை\n");
-            free(obj);
             free(snapshot);
             ta_sb_free(&asm_sb);
             unlink(asmp);

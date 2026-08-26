@@ -3,12 +3,14 @@
 
 #include <inttypes.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <setjmp.h>
 #include <stdbool.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 static void rt_fail(const char *msg) {
     fprintf(stderr, "\u0b87\u0baf\u0b95\u0bcd\u0b95 \u0ba8\u0bc7\u0bb0\u0bcd \u0baa\u0bbf\u0bb4\u0bc8: %s\n", msg);
@@ -62,9 +64,8 @@ static int gc_stats_env = -1;
    /proc/self/maps (the "[stack]" region's end address), which is correct
    for the main thread regardless of loader quirks. */
 static void gc_init_stack_bounds(void) {
-    static int done = 0;
-    if (done) return;
-    done = 1;
+    static atomic_int gc_init_done = 0;
+    if (atomic_exchange(&gc_init_done, 1)) return;
     FILE *m = fopen("/proc/self/maps", "r");
     if (!m) return;
     char line[512];
@@ -441,15 +442,30 @@ static const uint8_t rt_utf8_len[256] = {
 };
 
 int64_t ta_rt_str_at(TaRtStr *s, int64_t i) {
-    if (!s || i < 0) ta_rt_abort_index(i, s ? s->len : 0);
-    int64_t cp_index = 0;
+    if (!s) ta_rt_abort_index(i, 0);
+    /* Count code points so negative indices can wrap (Python-style). */
+    int64_t ncp = 0;
     size_t pos = 0;
     while (pos < (size_t)s->len) {
         uint8_t c = (uint8_t)s->data[pos];
         size_t cl = rt_utf8_len[c];
         if (cl == 0) cl = 1;
         if ((size_t)(pos + cl) > (size_t)s->len) cl = 1;
-        if (cp_index == i) {
+        ncp++;
+        pos += cl;
+    }
+    int64_t idx = i;
+    if (idx < 0) idx += ncp;
+    if (idx < 0 || idx >= ncp) ta_rt_abort_index(i, ncp);
+
+    int64_t cp_index = 0;
+    pos = 0;
+    while (pos < (size_t)s->len) {
+        uint8_t c = (uint8_t)s->data[pos];
+        size_t cl = rt_utf8_len[c];
+        if (cl == 0) cl = 1;
+        if ((size_t)(pos + cl) > (size_t)s->len) cl = 1;
+        if (cp_index == idx) {
             if (cl == 1) return c;
             uint32_t cp = c & ((1u << (7 - cl)) - 1);
             for (size_t k = 1; k < cl; k++) cp = (cp << 6) | ((uint8_t)s->data[pos + k] & 0x3F);
@@ -458,7 +474,7 @@ int64_t ta_rt_str_at(TaRtStr *s, int64_t i) {
         pos += cl;
         cp_index++;
     }
-    ta_rt_abort_index(i, cp_index);
+    ta_rt_abort_index(i, ncp);
     return -1;
 }
 
@@ -470,6 +486,130 @@ TaRtStr *ta_rt_str_sub(TaRtStr *s, int64_t start, int64_t end) {
     TaRtStr *out = ta_rt_str_new(end - start);
     memcpy(out->data, s->data + start, (size_t)(end - start));
     return out;
+}
+
+TaRtList *ta_rt_str_split(TaRtStr *s, TaRtStr *sep) {
+    if (!s) return ta_rt_list_new_n(0);
+    if (!sep || sep->len == 0) {
+        TaRtList *l = ta_rt_list_new_n(1);
+        ta_rt_list_set(l, 0, &s);
+        return l;
+    }
+    size_t slen = (size_t)s->len, plen = (size_t)sep->len;
+    size_t cap = 4, n = 0;
+    size_t *rng = malloc(cap * 2 * sizeof(size_t));
+    size_t prev = 0, i = 0;
+    while (i + plen <= slen) {
+        if (memcmp(s->data + i, sep->data, plen) == 0) {
+            if (n + 1 > cap) { cap *= 2; rng = realloc(rng, cap * 2 * sizeof(size_t)); }
+            rng[2 * n] = prev;
+            rng[2 * n + 1] = i;
+            n++;
+            prev = i + plen;
+            i = prev;
+        } else {
+            i++;
+        }
+    }
+    if (n + 1 > cap) { cap *= 2; rng = realloc(rng, cap * 2 * sizeof(size_t)); }
+    rng[2 * n] = prev;
+    rng[2 * n + 1] = slen;
+    n++;
+    TaRtList *l = ta_rt_list_new_n((int64_t)n);
+    for (size_t k = 0; k < n; k++) {
+        TaRtStr *piece = ta_rt_str_sub(s, (int64_t)rng[2 * k], (int64_t)rng[2 * k + 1]);
+        ta_rt_list_set(l, (int64_t)k, &piece);
+    }
+    free(rng);
+    return l;
+}
+
+TaRtStr *ta_rt_str_join(TaRtList *l, TaRtStr *sep) {
+    if (!l || l->len == 0) return ta_rt_str_new(0);
+    TaRtStr *sp = sep ? sep : ta_rt_str_new(0);
+    size_t seplen = sp ? (size_t)sp->len : 0;
+    size_t total = 0;
+    for (int64_t k = 0; k < l->len; k++) {
+        TaRtStr *e = (TaRtStr *)(uintptr_t)l->cells[k];
+        if (e) total += (size_t)e->len;
+    }
+    if (l->len > 0) total += seplen * ((size_t)l->len - 1);
+    TaRtStr *out = ta_rt_str_new((int64_t)total);
+    size_t off = 0;
+    for (int64_t k = 0; k < l->len; k++) {
+        if (k > 0 && seplen) {
+            memcpy(out->data + off, sp->data, seplen);
+            off += seplen;
+        }
+        TaRtStr *e = (TaRtStr *)(uintptr_t)l->cells[k];
+        if (e && e->len) {
+            memcpy(out->data + off, e->data, (size_t)e->len);
+            off += (size_t)e->len;
+        }
+    }
+    return out;
+}
+
+TaRtStr *ta_rt_str_strip(TaRtStr *s) {
+    if (!s) return ta_rt_str_new(0);
+    size_t start = 0, end = (size_t)s->len;
+    while (start < end && isspace((unsigned char)s->data[start])) start++;
+    while (end > start && isspace((unsigned char)s->data[end - 1])) end--;
+    return ta_rt_str_sub(s, (int64_t)start, (int64_t)end);
+}
+
+TaRtStr *ta_rt_str_replace(TaRtStr *s, TaRtStr *old, TaRtStr *new) {
+    if (!s) return ta_rt_str_new(0);
+    if (!old || old->len == 0) return ta_rt_str_sub(s, 0, s->len);
+    size_t slen = (size_t)s->len, olen = (size_t)old->len;
+    size_t nlen = (new && new->len) ? (size_t)new->len : 0;
+    size_t count = 0, i = 0;
+    while (i + olen <= slen) {
+        if (memcmp(s->data + i, old->data, olen) == 0) { count++; i += olen; }
+        else i++;
+    }
+    size_t total = slen - count * olen + count * nlen;
+    TaRtStr *out = ta_rt_str_new((int64_t)total);
+    size_t off = 0;
+    i = 0;
+    while (i + olen <= slen) {
+        if (memcmp(s->data + i, old->data, olen) == 0) {
+            if (nlen) memcpy(out->data + off, new->data, nlen);
+            off += nlen;
+            i += olen;
+        } else {
+            out->data[off++] = s->data[i++];
+        }
+    }
+    while (i < slen) out->data[off++] = s->data[i++];
+    return out;
+}
+
+static TaRtStr *ta_rt_str_case(TaRtStr *s, int up) {
+    if (!s) return ta_rt_str_new(0);
+    TaRtStr *out = ta_rt_str_new(s->len);
+    for (int64_t i = 0; i < s->len; i++) {
+        unsigned char c = (unsigned char)s->data[i];
+        if (up) { if (c >= 'a' && c <= 'z') c -= 32; }
+        else    { if (c >= 'A' && c <= 'Z') c += 32; }
+        out->data[i] = (char)c;
+    }
+    return out;
+}
+
+TaRtStr *ta_rt_str_upper(TaRtStr *s) { return ta_rt_str_case(s, 1); }
+TaRtStr *ta_rt_str_lower(TaRtStr *s) { return ta_rt_str_case(s, 0); }
+
+int64_t ta_rt_str_startswith(TaRtStr *s, TaRtStr *p) {
+    if (!s || !p) return 0;
+    if (p->len > s->len) return 0;
+    return memcmp(s->data, p->data, (size_t)p->len) == 0 ? 1 : 0;
+}
+
+int64_t ta_rt_str_endswith(TaRtStr *s, TaRtStr *p) {
+    if (!s || !p) return 0;
+    if (p->len > s->len) return 0;
+    return memcmp(s->data + (s->len - p->len), p->data, (size_t)p->len) == 0 ? 1 : 0;
 }
 
 TaRtStr *ta_rt_input(void) {

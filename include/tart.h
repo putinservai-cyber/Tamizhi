@@ -42,6 +42,14 @@ int64_t ta_rt_str_eq(TaRtStr *a, TaRtStr *b);
 int64_t ta_rt_str_cmp(TaRtStr *a, TaRtStr *b);
 int64_t ta_rt_str_at(TaRtStr *s, int64_t i);
 TaRtStr *ta_rt_str_sub(TaRtStr *s, int64_t start, int64_t end);
+TaRtList *ta_rt_str_split(TaRtStr *s, TaRtStr *sep);
+TaRtStr *ta_rt_str_join(TaRtList *l, TaRtStr *sep);
+TaRtStr *ta_rt_str_strip(TaRtStr *s);
+TaRtStr *ta_rt_str_replace(TaRtStr *s, TaRtStr *old, TaRtStr *new);
+TaRtStr *ta_rt_str_upper(TaRtStr *s);
+TaRtStr *ta_rt_str_lower(TaRtStr *s);
+int64_t ta_rt_str_startswith(TaRtStr *s, TaRtStr *prefix);
+int64_t ta_rt_str_endswith(TaRtStr *s, TaRtStr *suffix);
 
 TaRtStr *ta_rt_input(void);
 TaRtList *ta_rt_range_1(int64_t n);

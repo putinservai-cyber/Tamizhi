@@ -26,7 +26,15 @@ typedef enum {
     TA_BI_SQRT,
     TA_BI_POW,
     TA_BI_STR_CONCAT,
-    TA_BI_STR_SUB
+    TA_BI_STR_SUB,
+    TA_BI_STR_SPLIT,
+    TA_BI_STR_JOIN,
+    TA_BI_STR_STRIP,
+    TA_BI_STR_REPLACE,
+    TA_BI_STR_UPPER,
+    TA_BI_STR_LOWER,
+    TA_BI_STR_STARTSWITH,
+    TA_BI_STR_ENDSWITH
 } TaBuiltinId;
 
 typedef struct TaScope TaScope;

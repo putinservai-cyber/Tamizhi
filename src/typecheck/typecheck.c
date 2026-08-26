@@ -168,6 +168,137 @@ static const TaType *builtin_result_type(TcCtx *c, TaSymbol *sym, TaExpr **args,
             bool both_int = t0->kind == TY_INT && t1->kind == TY_INT;
             return both_int ? ta_ty_int() : ta_ty_float();
         }
+        case TA_BI_STR_SPLIT: {
+            if (nargs != 2) {
+                tc_error(c, TA_ERR_TYPE + 3, line, col,
+                         "பிரி() க்கு 2 அளவுருக்கள் வேண்டும்",
+                         "எ.கா.: பிரி(உரை, பிரிப்பான்)");
+                return ta_ty_list(ta_ty_string());
+            }
+            const TaType *t0 = check_expr(c, args[0]);
+            const TaType *t1 = check_expr(c, args[1]);
+            if (t0->kind != TY_STRING)
+                tc_error(c, TA_ERR_TYPE + 4, args[0]->line, args[0]->col,
+                         "பிரி(): முதல் அளவுரு உரை ஆக இருக்க வேண்டும்",
+                         "சரம் பிரிக்கப்பட வேண்டும்");
+            if (t1->kind != TY_STRING)
+                tc_error(c, TA_ERR_TYPE + 4, args[1]->line, args[1]->col,
+                         "பிரி(): இரண்டாம் அளவுரு உரை ஆக இருக்க வேண்டும்",
+                         "பிரிப்பான் உரை ஆகும்");
+            return ta_ty_list(ta_ty_string());
+        }
+        case TA_BI_STR_JOIN: {
+            if (nargs != 2) {
+                tc_error(c, TA_ERR_TYPE + 3, line, col,
+                         "இணைப்பு() க்கு 2 அளவுருக்கள் வேண்டும்",
+                         "எ.கா.: இணைப்பு(words, \" \")");
+                return ta_ty_string();
+            }
+            const TaType *t0 = check_expr(c, args[0]);
+            const TaType *t1 = check_expr(c, args[1]);
+            if (t0->kind != TY_LIST || !t0->elem || t0->elem->kind != TY_STRING)
+                tc_error(c, TA_ERR_TYPE + 4, args[0]->line, args[0]->col,
+                         "இணைப்பு(): முதல் அளவுரு சரப்பட்டியல் [உரை] ஆக இருக்க வேண்டும்",
+                         "எ.கா.: இணைப்பு(words, \" \")");
+            if (t1->kind != TY_STRING)
+                tc_error(c, TA_ERR_TYPE + 4, args[1]->line, args[1]->col,
+                         "இணைப்பு(): இரண்டாம் அளவுரு உரை ஆக இருக்க வேண்டும்",
+                         "பிரிப்பான் உரை ஆகும்");
+            return ta_ty_string();
+        }
+        case TA_BI_STR_STRIP: {
+            if (nargs != 1) {
+                tc_error(c, TA_ERR_TYPE + 3, line, col,
+                         "நறுக்கு() க்கு 1 அளவுரு வேண்டும்",
+                         "எ.கா.: நறுக்கு(உரை)");
+                return ta_ty_string();
+            }
+            const TaType *t0 = check_expr(c, args[0]);
+            if (t0->kind != TY_STRING)
+                tc_error(c, TA_ERR_TYPE + 4, args[0]->line, args[0]->col,
+                         "நறுக்கு(): அளவுரு உரை ஆக இருக்க வேண்டும்",
+                         "முனைகளிலுள்ள வெற்றிடங்கள் நீக்கப்படும்");
+            return ta_ty_string();
+        }
+        case TA_BI_STR_REPLACE: {
+            if (nargs != 3) {
+                tc_error(c, TA_ERR_TYPE + 3, line, col,
+                         "மாற்று() க்கு 3 அளவுருக்கள் வேண்டும்",
+                         "எ.கா.: மாற்று(உரை, பழையது, புதியது)");
+                return ta_ty_string();
+            }
+            const TaType *t0 = check_expr(c, args[0]);
+            const TaType *t1 = check_expr(c, args[1]);
+            const TaType *t2 = check_expr(c, args[2]);
+            if (t0->kind != TY_STRING)
+                tc_error(c, TA_ERR_TYPE + 4, args[0]->line, args[0]->col,
+                         "மாற்று(): முதல் அளவுரு உரை ஆக இருக்க வேண்டும்", "");
+            if (t1->kind != TY_STRING)
+                tc_error(c, TA_ERR_TYPE + 4, args[1]->line, args[1]->col,
+                         "மாற்று(): இரண்டாம் அளவுரு உரை ஆக இருக்க வேண்டும்", "");
+            if (t2->kind != TY_STRING)
+                tc_error(c, TA_ERR_TYPE + 4, args[2]->line, args[2]->col,
+                         "மாற்று(): மூன்றாம் அளவுரு உரை ஆக இருக்க வேண்டும்", "");
+            return ta_ty_string();
+        }
+        case TA_BI_STR_UPPER: {
+            if (nargs != 1) {
+                tc_error(c, TA_ERR_TYPE + 3, line, col,
+                         "மேலெழுத்து() க்கு 1 அளவுரு வேண்டும்", "எ.கா.: மேலெழுத்து(உரை)");
+                return ta_ty_string();
+            }
+            const TaType *t0 = check_expr(c, args[0]);
+            if (t0->kind != TY_STRING)
+                tc_error(c, TA_ERR_TYPE + 4, args[0]->line, args[0]->col,
+                         "மேலெழுத்து(): அளவுரு உரை ஆக இருக்க வேண்டும்", "");
+            return ta_ty_string();
+        }
+        case TA_BI_STR_LOWER: {
+            if (nargs != 1) {
+                tc_error(c, TA_ERR_TYPE + 3, line, col,
+                         "சிறியெழுத்து() க்கு 1 அளவுரு வேண்டும்", "எ.கா.: சிறியெழுத்து(உரை)");
+                return ta_ty_string();
+            }
+            const TaType *t0 = check_expr(c, args[0]);
+            if (t0->kind != TY_STRING)
+                tc_error(c, TA_ERR_TYPE + 4, args[0]->line, args[0]->col,
+                         "சிறியெழுத்து(): அளவுரு உரை ஆக இருக்க வேண்டும்", "");
+            return ta_ty_string();
+        }
+        case TA_BI_STR_STARTSWITH: {
+            if (nargs != 2) {
+                tc_error(c, TA_ERR_TYPE + 3, line, col,
+                         "துவங்கிறதா() க்கு 2 அளவுருக்கள் வேண்டும்",
+                         "எ.கா.: துவங்கிறதா(உரை, முன்னொட்டு)");
+                return ta_ty_bool();
+            }
+            const TaType *t0 = check_expr(c, args[0]);
+            const TaType *t1 = check_expr(c, args[1]);
+            if (t0->kind != TY_STRING)
+                tc_error(c, TA_ERR_TYPE + 4, args[0]->line, args[0]->col,
+                         "துவங்கிறதா(): முதல் அளவுரு உரை ஆக இருக்க வேண்டும்", "");
+            if (t1->kind != TY_STRING)
+                tc_error(c, TA_ERR_TYPE + 4, args[1]->line, args[1]->col,
+                         "துவங்கிறதா(): இரண்டாம் அளவுரு உரை ஆக இருக்க வேண்டும்", "");
+            return ta_ty_bool();
+        }
+        case TA_BI_STR_ENDSWITH: {
+            if (nargs != 2) {
+                tc_error(c, TA_ERR_TYPE + 3, line, col,
+                         "முடிவதா() க்கு 2 அளவுருக்கள் வேண்டும்",
+                         "எ.கா.: முடிவதா(உரை, பின்னொட்டு)");
+                return ta_ty_bool();
+            }
+            const TaType *t0 = check_expr(c, args[0]);
+            const TaType *t1 = check_expr(c, args[1]);
+            if (t0->kind != TY_STRING)
+                tc_error(c, TA_ERR_TYPE + 4, args[0]->line, args[0]->col,
+                         "முடிவதா(): முதல் அளவுரு உரை ஆக இருக்க வேண்டும்", "");
+            if (t1->kind != TY_STRING)
+                tc_error(c, TA_ERR_TYPE + 4, args[1]->line, args[1]->col,
+                         "முடிவதா(): இரண்டாம் அளவுரு உரை ஆக இருக்க வேண்டும்", "");
+            return ta_ty_bool();
+        }
         default:
             break;
     }

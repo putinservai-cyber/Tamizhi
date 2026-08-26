@@ -85,6 +85,7 @@ static void register_module_fn(TaScope *module_scope, const char *name, TaBuilti
                                const TaType *ret, size_t nfixed, const TaType **fixed) {
     TaSymbol *sym = register_builtin_fn(module_scope, name, id);
     sym->fn.ret = ret;
+    sym->type = ret;
     for (size_t i = 0; i < nfixed; i++) {
         if (sym->fn.nparams == sym->fn.pcap) {
             sym->fn.pcap = sym->fn.pcap ? sym->fn.pcap * 2 : 4;
@@ -111,6 +112,15 @@ static void register_builtins(TaScope *globals) {
     register_builtin_fn(globals, "உள்ளீடு", TA_BI_INPUT);
     register_builtin_fn(globals, "நீளம்", TA_BI_LEN);
     register_builtin_fn(globals, "வரம்பு", TA_BI_RANGE);
+
+    register_builtin_fn(globals, "பிரி", TA_BI_STR_SPLIT);
+    register_builtin_fn(globals, "இணைப்பு", TA_BI_STR_JOIN);
+    register_builtin_fn(globals, "நறுக்கு", TA_BI_STR_STRIP);
+    register_builtin_fn(globals, "மாற்று", TA_BI_STR_REPLACE);
+    register_builtin_fn(globals, "மேலெழுத்து", TA_BI_STR_UPPER);
+    register_builtin_fn(globals, "சிறியெழுத்து", TA_BI_STR_LOWER);
+    register_builtin_fn(globals, "துவங்கிறதா", TA_BI_STR_STARTSWITH);
+    register_builtin_fn(globals, "முடிவதா", TA_BI_STR_ENDSWITH);
 
     TaSymbol *mathmod = ta_symbol_new("கணிதம்", TA_SYM_MODULE, 0, 0);
     mathmod->members = ta_scope_new(globals);

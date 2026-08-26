@@ -336,6 +336,52 @@ static TaOperand gen_call(TirCtx *c, TaExpr *e) {
                 TaOperand a[3] = {s, i1, i2};
                 return emit_rt(c, "ta_rt_str_sub", a, 3, ta_ty_string());
             }
+            case TA_BI_STR_SPLIT: {
+                TaOperand a0 = gen_expr(c, e->as.call.args[0]);
+                TaOperand a1 = gen_expr(c, e->as.call.args[1]);
+                TaOperand a[2] = {a0, a1};
+                return emit_rt(c, "ta_rt_str_split", a, 2, ta_ty_list(ta_ty_string()));
+            }
+            case TA_BI_STR_JOIN: {
+                TaOperand a0 = gen_expr(c, e->as.call.args[0]);
+                TaOperand a1 = gen_expr(c, e->as.call.args[1]);
+                TaOperand a[2] = {a0, a1};
+                return emit_rt(c, "ta_rt_str_join", a, 2, ta_ty_string());
+            }
+            case TA_BI_STR_STRIP: {
+                TaOperand a0 = gen_expr(c, e->as.call.args[0]);
+                TaOperand a[1] = {a0};
+                return emit_rt(c, "ta_rt_str_strip", a, 1, ta_ty_string());
+            }
+            case TA_BI_STR_REPLACE: {
+                TaOperand a0 = gen_expr(c, e->as.call.args[0]);
+                TaOperand a1 = gen_expr(c, e->as.call.args[1]);
+                TaOperand a2 = gen_expr(c, e->as.call.args[2]);
+                TaOperand a[3] = {a0, a1, a2};
+                return emit_rt(c, "ta_rt_str_replace", a, 3, ta_ty_string());
+            }
+            case TA_BI_STR_UPPER: {
+                TaOperand a0 = gen_expr(c, e->as.call.args[0]);
+                TaOperand a[1] = {a0};
+                return emit_rt(c, "ta_rt_str_upper", a, 1, ta_ty_string());
+            }
+            case TA_BI_STR_LOWER: {
+                TaOperand a0 = gen_expr(c, e->as.call.args[0]);
+                TaOperand a[1] = {a0};
+                return emit_rt(c, "ta_rt_str_lower", a, 1, ta_ty_string());
+            }
+            case TA_BI_STR_STARTSWITH: {
+                TaOperand a0 = gen_expr(c, e->as.call.args[0]);
+                TaOperand a1 = gen_expr(c, e->as.call.args[1]);
+                TaOperand a[2] = {a0, a1};
+                return emit_rt(c, "ta_rt_str_startswith", a, 2, ta_ty_bool());
+            }
+            case TA_BI_STR_ENDSWITH: {
+                TaOperand a0 = gen_expr(c, e->as.call.args[0]);
+                TaOperand a1 = gen_expr(c, e->as.call.args[1]);
+                TaOperand a[2] = {a0, a1};
+                return emit_rt(c, "ta_rt_str_endswith", a, 2, ta_ty_bool());
+            }
             default:
                 return (TaOperand){TA_OP_NONE, 0, 0, 0, 0};
         }

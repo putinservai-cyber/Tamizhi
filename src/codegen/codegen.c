@@ -76,7 +76,7 @@ static void load_flt_to(Cg *c, const TaOperand *o, const char *xreg) {
     switch (o->kind) {
         case TA_OP_FLOAT: {
             int fi = float_slot((Cg *)c, o->f);
-            E(c, "movsd %s, [LCF%d]", xreg, fi);
+            E(c, "movsd %s, [rip+LCF%d]", xreg, fi);
             break;
         }
         case TA_OP_TEMP:
@@ -184,25 +184,53 @@ static void call_with_args(Cg *c, const char *target_label, const TaType **arg_t
                      : (arg_types && arg_types[i] ? arg_types[i]->kind == TY_FLOAT : false);
         if (!flt[i]) nint++;
     }
-    size_t nstack = nint > 6 ? nint - 6 : 0;
+
+    /* Integer args beyond the 6 GP registers, and float args beyond the 8 XMM
+       registers, spill to the stack and must be pushed in reverse
+       (right-to-left) order per the x86-64 SysV ABI. */
+    size_t nstack_int = nint > 6 ? nint - 6 : 0;
+    size_t nstack_flt = 0;
+    {
+        size_t nflt = 0;
+        for (size_t i = 0; i < nargs; i++) if (flt[i]) nflt++;
+        if (nflt > 8) nstack_flt = nflt - 8;
+    }
+    size_t nstack = nstack_int + nstack_flt;
     size_t pad = (nstack % 2) != 0 ? 8 : 0;
 
-    int ii = 0, xi = 0;
     if (pad) E(c, "sub rsp, %lld", (long long)pad);
-    for (size_t i = 0; i < nargs; i++) {
-        if (!flt[i] && (size_t)ii >= 6) {
-            load_int_to(c, &args[i], "rax");
+
+    if (nstack_int) {
+        size_t *idx = ta_xmalloc(nstack_int * sizeof(size_t));
+        size_t cnt = 0, ipos = 0;
+        for (size_t i = 0; i < nargs; i++) {
+            if (flt[i]) continue;
+            if (ipos >= 6) idx[cnt++] = i;
+            ipos++;
+        }
+        for (size_t s = cnt; s-- > 0;) {
+            load_int_to(c, &args[idx[s]], "rax");
             E(c, "push rax");
         }
+        free(idx);
     }
-    for (size_t k = nargs; k-- > 0;) {
-        if (!flt[k]) {
-            if (ii < 6) break;
+    if (nstack_flt) {
+        size_t *idx = ta_xmalloc(nstack_flt * sizeof(size_t));
+        size_t cnt = 0, xpos = 0;
+        for (size_t i = 0; i < nargs; i++) {
+            if (!flt[i]) continue;
+            if (xpos >= 8) idx[cnt++] = i;
+            xpos++;
         }
+        for (size_t s = cnt; s-- > 0;) {
+            load_flt_to(c, &args[idx[s]], "xmm0");
+            E(c, "sub rsp, 8");
+            E(c, "movsd [rsp], xmm0");
+        }
+        free(idx);
     }
 
-    ii = 0;
-    xi = 0;
+    int ii = 0, xi = 0;
     for (size_t i = 0; i < nargs; i++) {
         if (flt[i]) {
             if (xi < 8) load_flt_to(c, &args[i], xregs[xi++]);
