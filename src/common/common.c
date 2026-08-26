@@ -44,7 +44,7 @@ void ta_diag_report_v(TaDiagnostics *d, int code, const char *file, int line, in
         d->cap = d->cap ? d->cap * 2 : 8;
         d->items = realloc(d->items, d->cap * sizeof(TaDiagnostic *));
         if (!d->items) {
-            fprintf(stderr, "TA5001: out of memory\n");
+            fprintf(stderr, "TA5001: நினைவகம் போதவில்லை\n");
             exit(70);
         }
     }
@@ -136,7 +136,7 @@ void ta_diag_print_all(const TaDiagnostics *d, FILE *out, const char *source) {
 void *ta_xmalloc(size_t n) {
     void *p = malloc(n ? n : 1);
     if (!p) {
-        fprintf(stderr, "TA5001: நினைவகம் போதவில்லை (out of memory)\n");
+        fprintf(stderr, "TA5001: நினைவகம் போதவில்லை\n");
         exit(70);
     }
     return p;
@@ -145,7 +145,7 @@ void *ta_xmalloc(size_t n) {
 void *ta_xcalloc(size_t n, size_t sz) {
     void *p = calloc(n ? n : 1, sz ? sz : 1);
     if (!p) {
-        fprintf(stderr, "TA5001: நினைவகம் போதவில்லை (out of memory)\n");
+        fprintf(stderr, "TA5001: நினைவகம் போதவில்லை\n");
         exit(70);
     }
     return p;
@@ -154,7 +154,7 @@ void *ta_xcalloc(size_t n, size_t sz) {
 void *ta_xrealloc(void *p, size_t n) {
     void *q = realloc(p, n ? n : 1);
     if (!q) {
-        fprintf(stderr, "TA5001: நினைவகம் போதவில்லை (out of memory)\n");
+        fprintf(stderr, "TA5001: நினைவகம் போதவில்லை\n");
         exit(70);
     }
     return q;

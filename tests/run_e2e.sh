@@ -43,5 +43,18 @@ fi
 $TA doctor >/dev/null 2>&1; drc=$?
 if [ $drc -le 1 ]; then pass=$((pass+1)); echo "PASS doctor"; else fail=$((fail+1)); echo "FAIL doctor exit=$drc"; fi
 
+$TA repl <<'REOLEOF' | grep -q ":வெளியேறு"
+:உதவி
+:வெளியேறு
+REOLEOF
+    [ ${PIPESTATUS[0]} -eq 0 ] && { pass=$((pass+1)); echo "PASS repl-tamil"; } || { fail=$((fail+1)); echo "FAIL repl-tamil"; }
+
+skhome="$tmpd/skhome"
+mkdir -p "$skhome/.config" "$skhome/.local/share/konsole"
+printf '[Desktop Entry]\nDefaultProfile=Default.profile\n' > "$skhome/.config/konsolerc"
+printf '[Appearance]\nFont=Monospace,10,-1,5,50,0,0,0,0,0\n\n[General]\nName=Default\nParent=FALLBACK/\n' > "$skhome/.local/share/konsole/Default.profile"
+HOME="$skhome" KONSOLE_VERSION=9999 $TA setup-konsole >/dev/null 2>&1
+grep -q "Font=Noto Sans Tamil" "$skhome/.local/share/konsole/Default.profile" &&     { pass=$((pass+1)); echo "PASS setup-konsole"; } || { fail=$((fail+1)); echo "FAIL setup-konsole"; }
+
 echo "e2e: $pass passed, $fail failed"
 exit $([ $fail -eq 0 ] && echo 0 || echo 1)

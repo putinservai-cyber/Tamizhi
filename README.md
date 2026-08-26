@@ -48,7 +48,7 @@ ta run   <file.ta>            compile to a temp dir and execute
 ta check <file.ta>            lex/parse/semantic/type-check only
 ta repl                       interactive session (:help inside)
 ta fmt   <file.ta>            print canonically formatted source
-ta doctor                      check locale/fonts for Tamil display
+ta doctor                      சூழல் பரிசோதனை
 ta version / ta help
 ```
 
@@ -89,6 +89,17 @@ docs/       language.md grammar.md types.md compiler.md memory.md
             standard-library.md errors.md roadmap.md troubleshooting.md
 examples/   hello.ta fibonacci.ta collections.ta
 ```
+
+## Terminal display
+
+Tamil output needs a UTF-8 locale and a font with Tamil glyphs:
+
+```bash
+ta doctor            # diagnoses your terminal + fonts
+ta setup-konsole     # one-shot fix inside KDE Konsole
+```
+
+See `docs/troubleshooting.md`.
 
 ## Status
 

@@ -16,12 +16,6 @@
 
 #define TA_MAIN_NAME "முதன்மை"
 
-/* TA_LANG=en  →  all CLI messages in English instead of Tamil */
-static bool g_english = false;
-
-/* Bilingual helper: pick Tamil or English string at runtime */
-#define TL(ta, en) (g_english ? (en) : (ta))
-
 typedef struct {
     char *asm_path;
     char *exe_path;
@@ -191,10 +185,10 @@ static int cmd_build(const char *argv0, const char *src_path, const char *out_ex
     char *hint = NULL;
     int lrc = link_exe(asm_path, obj, out_exe, &hint);
     if (lrc != 0) {
-        fprintf(stderr, "பிழை TA6003: link செய்ய முடியவில்லை (%s)\n", hint ? hint : "cc failed");
+        fprintf(stderr, "பிழை TA6003: link செய்ய முடியவில்லை (%s)\n", hint ? hint : "'cc' இல்லை");
         unlink(asm_path);
     } else if (show_banner) {
-        printf("✓ %s (assembly: %s)\n", out_exe, asm_path);
+        printf("✓ %s (அதன் கூற்று: %s)\n", out_exe, asm_path);
     }
     free(hint);
     free(obj);
@@ -282,16 +276,16 @@ static int cmd_fmt(const char *src_path) {
 
 static void repl_help(void) {
     printf("REPL கட்டளைகள்:\n"
-           "  :help   — உதவி\n"
-           "  :show   — இதுவரை எழுதிய நிரலைக் காட்டு\n"
-           "  :clear  — நிரலை அழி\n"
-           "  :quit   — வெளியேறு (Ctrl-D)\n"
+           "  :உதவி    — இந்த விளக்கம் (:help)\n"
+           "  :காட்டு   — இதுவரை எழுதிய நிரலைக் காட்டு (:show)\n"
+           "  :அழி     — நிரலை அழி (:clear)\n"
+           "  :வெளியேறு — வெளியேறு (:quit, Ctrl-D)\n"
            "\nஒவ்வொரு உள்ளீட்டிலும் முழு நிரல் compile செய்யப்பட்டு "
            "தொடக்கத்திலிருந்து இயக்கப்படும்.\n");
 }
 
 static int cmd_repl(const char *argv0) {
-    printf("Tamizhi %s REPL — :help ஐப் பாருங்கள்; வெளியேற: :quit\n", TA_VERSION);
+    printf("தமிழி v%s — :உதவி ஐப் பாருங்கள்; வெளியேற: :வெளியேறு\n", TA_VERSION);
     TaStrBuf buf;
     ta_sb_init(&buf);
     char line[4096];
@@ -303,13 +297,14 @@ static int cmd_repl(const char *argv0) {
         size_t ll = strlen(line);
         while (ll && (line[ll - 1] == '\n' || line[ll - 1] == '\r')) line[--ll] = 0;
 
-        if (strcmp(line, ":quit") == 0 || strcmp(line, ":q") == 0) break;
-        if (strcmp(line, ":help") == 0) { repl_help(); continue; }
-        if (strcmp(line, ":show") == 0) {
+        if (strcmp(line, ":வெளியேறு") == 0 || strcmp(line, ":quit") == 0 ||
+            strcmp(line, ":q") == 0) break;
+        if (strcmp(line, ":உதவி") == 0 || strcmp(line, ":help") == 0) { repl_help(); continue; }
+        if (strcmp(line, ":காட்டு") == 0 || strcmp(line, ":show") == 0) {
             printf("--- நிரல் ---\n%s--------------\n", buf.len ? buf.data : "(காலியாக உள்ளது)");
             continue;
         }
-        if (strcmp(line, ":clear") == 0) {
+        if (strcmp(line, ":அழி") == 0 || strcmp(line, ":clear") == 0) {
             ta_sb_free(&buf);
             ta_sb_init(&buf);
             printf("(அழிக்கப்பட்டது)\n");
@@ -339,7 +334,7 @@ static int cmd_repl(const char *argv0) {
         char tmpl[] = "/tmp/tamizhi-repl-XXXXXX";
         char *dir = mkdtemp(tmpl);
         if (!dir) {
-            fprintf(stderr, "repl: temp dir failed\n");
+            fprintf(stderr, "தற்காலிக அடைவு உருவாகவில்லை\n");
             free(snapshot);
             ta_sb_free(&asm_sb);
             continue;
@@ -360,7 +355,7 @@ static int cmd_repl(const char *argv0) {
         }
         char *hint = NULL;
         if (link_exe(asmp, obj, exe, &hint) != 0) {
-            fprintf(stderr, "link failed\n");
+            fprintf(stderr, "இணைப்பு தோல்வி\n");
         } else {
             fflush(stdout);
             fflush(stderr);
@@ -392,20 +387,20 @@ static int cmd_repl(const char *argv0) {
 /* setup-konsole: auto-configure Konsole font for Tamil rendering      */
 /* ------------------------------------------------------------------ */
 static int cmd_setup_konsole(void) {
-    printf("Tamizhi — Konsole Tamil Font Setup\n");
-    printf("===================================\n\n");
+    printf("தமிழ௱ — Konsole தமிழ் எழுத்துரு அமைப்பு\n");
+    printf("════════════════════════════\n\n");
 
     /* 1. Must be running inside Konsole */
     const char *kver = getenv("KONSOLE_VERSION");
     const char *kdbus = getenv("KONSOLE_DBUS_SESSION");
     if (!kver && !kdbus) {
         fprintf(stderr,
-            "ERROR: Not running inside KDE Konsole.\n"
-            "  Open this terminal inside Konsole, then re-run:\n"
+            "பிழை: இது KDE Konsole-க்குள் இயங்கவில்லை.\n"
+            "  Konsole-ஐத் திறந்து மீண்டும் இயக்கவும்:\n"
             "    ta setup-konsole\n");
         return 1;
     }
-    printf("[1/4] Konsole detected (version %s)\n", kver ? kver : "unknown");
+    printf("[1/4] Konsole கண்டறியப்பட்டது (பதிப்பு %s)\n", kver ? kver : "unknown");
 
     /* 2. Find best available Tamil font */
     static const char *preferred[] = {
@@ -431,14 +426,14 @@ static int cmd_setup_konsole(void) {
     }
     if (best[0] == 0) {
         fprintf(stderr,
-            "ERROR: No Tamil font found on this system.\n"
-            "  Install one first:\n"
+            "பிழை: இந்த அமைப்புறையில் தமிழ் எழுத்துரு எதுவும் இல்லை.\n"
+            "  முதலில் நிறுவவும்:\n"
             "    Debian/Ubuntu : sudo apt install fonts-noto-core\n"
             "    Fedora        : sudo dnf install google-noto-sans-tamil-fonts\n"
             "    Arch          : sudo pacman -S noto-fonts\n");
         return 1;
     }
-    printf("[2/4] Best Tamil font: %s\n", best);
+    printf("[2/4] சிறந்த தமிழ் எழுத்துரு: %s\n", best);
 
     /* 3. Apply to current session via konsoleprofile */
     {
@@ -448,9 +443,9 @@ static int cmd_setup_konsole(void) {
             "konsoleprofile 'font=%s,12,-1,5,50,0,0,0,0,0' 2>/dev/null", best);
         int rc = system(cmd);
         if (rc == 0)
-            printf("[3/4] Font applied to current Konsole session  ✓\n");
+            printf("[3/4] தற்போதைய Konsole அமர்வுக்கு எழுத்துரு பயன்படுத்தப்பட்டது  ✓\n");
         else
-            printf("[3/4] konsoleprofile failed (rc=%d) — will try kwriteconfig5\n", rc);
+            printf("[3/4] konsoleprofile இயலவில்லை (rc=%d) — நிரந்தரமாக மட்டும் அமைக்கப்படுகிறது\n", rc);
     }
 
     /* 4. Make permanent: patch the default Konsole profile file */
@@ -513,7 +508,7 @@ static int cmd_setup_konsole(void) {
                     fclose(pf);
                     rename(tmp, profpath);
                     patched = 1;
-                    printf("[4/4] Profile '%s' updated permanently  ✓\n", defprofile);
+                    printf("[4/4] '%s' சுயவிவரம் நிரந்தரமாகப் புதுப்பிக்கப்பட்டது  ✓\n", defprofile);
                 } else {
                     fclose(pf);
                 }
@@ -521,19 +516,16 @@ static int cmd_setup_konsole(void) {
         }
     }
     if (!patched)
-        printf("[4/4] Could not patch profile automatically.\n"
-               "      Manual fix: Settings > Edit Profile > Appearance > Font > '%s'\n", best);
+        printf("[4/4] சுயவிவரத்தைத் தானாக திருத்த முடியவில்லை.\n"
+               "      கைமுறை: Settings ▸ Edit Profile ▸ Appearance ▸ Font ▸ '%s'\n", best);
 
-    printf("\n--- IMPORTANT NOTE ---\n");
-    printf("Even with the correct font, Konsole's text shaper does NOT fully\n");
-    printf("combine Tamil base letters + matras into proper akshar clusters.\n");
-    printf("For perfect Tamil rendering use kitty or WezTerm instead:\n");
+    printf("\n--- முக்கிய குறிப்பு ---\n");
+    printf("சரியான எழுத்துரு இருந்தாலும், Konsole-ன் எழுத்து உருவமைப்பு தமிழ்\n");
+    printf("எழுத்து+குறில்களை முழுமையாக இணைக்காது.\n");
+    printf("முழு தன்மைக்கு kitty அல்லது WezTerm பயன்படுத்துங்கள்:\n");
     printf("  kitty  : https://sw.kovidgoyal.net/kitty/\n");
     printf("  WezTerm: https://wezfurlong.org/wezterm/\n");
-    printf("\nTo display all Tamizhi CLI messages in English (workaround):\n");
-    printf("  export TA_LANG=en\n");
-    printf("  (add to ~/.bashrc or ~/.profile for permanent effect)\n");
-    return 0;
+                return 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -541,8 +533,8 @@ static int cmd_setup_konsole(void) {
 /* ------------------------------------------------------------------ */
 static int cmd_doctor(void) {
     int problems = 0;
-    printf("Tamizhi environment check / சூழல் பரிசோதனை\n");
-    printf("=============================================\n");
+    printf("Tamizhi சூழல் பரிசோதனை\n");
+    printf("════════════════════════════\n");
 
     const char *lc_all = getenv("LC_ALL");
     const char *lc_ctype = getenv("LC_CTYPE");
@@ -553,14 +545,14 @@ static int cmd_doctor(void) {
                             strcasecmp(codeset, "UTF8") == 0);
     printf("1) locale      : %s (codeset %s)  %s\n",
            eff ? eff : "(unset)", codeset ? codeset : "?",
-           utf8 ? "OK" : "FAIL: not UTF-8");
+           utf8 ? "✓" : "✗ UTF-8 அல்ல");
     if (!utf8) {
         problems++;
-        printf("   -> fix: export LANG=en_US.UTF-8\n");
+        printf("   -> தீர்வு: export LANG=ta_IN.UTF-8\n");
     }
 
     bool tty = isatty(1);
-    printf("2) stdout      : %s\n", tty ? "terminal  OK" : "piped/file  OK");
+    printf("2) stdout      : %s\n", tty ? "முனையம் ✓" : "pipe/கோப்பு ✓");
 
     /* Detect terminal type */
     const char *kver = getenv("KONSOLE_VERSION");
@@ -568,10 +560,9 @@ static int cmd_doctor(void) {
     const char *termapp = getenv("TERM_PROGRAM");
     if (kver) {
         printf("3) terminal    : KDE Konsole %s  "
-               "[WARNING: limited Tamil shaping]\n", kver);
-        printf("   -> run: ta setup-konsole   (auto-fix font)\n");
-        printf("   -> or : export TA_LANG=en  (English output)\n");
-        printf("   -> best: use kitty or WezTerm for full Tamil rendering\n");
+               "[எச்சரிக்கை: Tamil இணைப்பு வரம்பு குறைவு]\n", kver);
+        printf("   -> தீர்வு: ta setup-konsole   (எழுத்துரு தானாக அமையும்)\n");
+                printf("   -> சிறந்தது: kitty / WezTerm பயன்படுத்துங்கள்\n");
     } else {
         printf("3) terminal    : %s%s%s\n",
                termapp ? termapp : (term ? term : "unknown"),
@@ -594,7 +585,7 @@ static int cmd_doctor(void) {
         pclose(f);
         if (nfonts == 0) f = NULL;
         else {
-            printf("4) Tamil fonts : %d found — ", nfonts);
+            printf("4) தமிழ் எழுத்துரு : %d கண்டறியப்பட்டன — ", nfonts);
             for (int i = 0; i < nfonts && i < 3; i++)
                 printf("%s%s", fonts[i], i < nfonts-1 && i < 2 ? ", " : "");
             printf("\n");
@@ -602,75 +593,78 @@ static int cmd_doctor(void) {
     }
     if (!f || nfonts == 0) {
         problems++;
-        printf("4) Tamil fonts : NONE FOUND\n");
+        printf("4) தமிழ் எழுத்துரு : ✗ எதுவும் இல்லை\n");
         printf("   -> Fedora       : sudo dnf install google-noto-sans-tamil-fonts\n");
         printf("   -> Debian/Ubuntu: sudo apt install fonts-noto-core\n");
         printf("   -> Arch         : sudo pacman -S noto-fonts\n");
     }
 
     /* Cluster rendering test */
-    printf("5) Tamil cluster rendering test:\n");
-    printf("     Reference : [க] [கா] [கி] [கீ] [கு] [கூ] [கெ] [கே] [கை] [கொ] [கோ] [க்]\n");
-    printf("     Terminal  :  க    கா   கி   கீ   கு   கூ   கெ   கே   கை   கொ   கோ   க்\n");
-    printf("   Each bracket pair above should show ONE combined Tamil character.\n");
-    printf("   If you see broken/separated letters -> terminal shaping is failing.\n");
+    printf("5) தமிழ் எழுத்து இணைப்பு சோதனை:\n");
+    printf("     குறிப்பு : [க] [கா] [கி] [கீ] [கு] [கூ] [கெ] [கே] [கை] [கொ] [கோ] [க்]\n");
+    printf("     முனையம்  :  க    கா   கி   கீ   கு   கூ   கெ   கே   கை   கொ   கோ   க்\n");
+    printf("   மேலே ஒவ்வொரு [...] இணையிலும் ஒரே ஒரு இணைந்த எழுத்தே தெரிய வேண்டும்.\n");
+    printf("   எழுத்துக்கள் பிரிந்து/முற்றாகத் தெரிந்தால் -> முனைய வரம்பு தோல்வி.\n");
     if (kver)
-        printf("   Konsole fix: ta setup-konsole   OR   export TA_LANG=en\n");
+        printf("   Konsole தீர்வு: ta setup-konsole\n");
 
-    printf("\nResult: %s (%d problem%s)\n",
-           problems ? "NEEDS FIX" : "ALL OK", problems,
-           problems == 1 ? "" : "s");
+    printf("\nமுடிவு: %s (%d பிழை)\n",
+           problems ? "✗ சரிசெய்ய வேண்டும்" : "✓ எல்லாம் தயார்", problems);
     return problems ? 1 : 0;
 }
 
-static void usage(FILE *out, const char *prog) {
-    if (g_english) {
-        fprintf(out,
-            "Tamizhi v%s — Tamil programming language\n\n"
-            "Usage: %s <command> [arguments]\n\n"
-            "File extensions: .ta or .த\n"
-            "Two modes: build (native binary like C); run/repl (scripted like Python)\n\n"
-            "Commands:\n"
-            "  build <file.ta> [-o output]   compile to native executable\n"
-            "  run <file.ta>                 compile and run immediately\n"
-            "  check <file.ta>               type-check only\n"
-            "  repl                          interactive REPL\n"
-            "  fmt <file.ta>                 format source to stdout\n"
-            "  doctor                        check Tamil font/locale environment\n"
-            "  setup-konsole                 auto-configure KDE Konsole Tamil font\n"
-            "  version                       print version\n"
-            "  help                          print this help\n"
-            "\nTip: set TA_LANG=en to always use English output.\n",
-            TA_VERSION, prog);
-    } else {
-        fprintf(out,
-            "Tamizhi v%s — தமிழ் நிரலாக்க மொழி\n\n"
-            "பயன்பாடு: %s <கட்டளை> [arguments]\n\n"
-            "கோப்பு நீட்டிப்பு: .ta அல்லது .த\n"
-            "இரு இயக்க முறைகள்: build (native binary); run/REPL (script)\n\n"
-            "கட்டளைகள்:\n"
-            "  build <file.ta> [-o output]   native executable உருவாக்கு\n"
-            "  run <file.ta>                 compile செய்து உடனே இயக்கு\n"
-            "  check <file.ta>               type-check மட்டும்\n"
-            "  repl                          interactive REPL\n"
-            "  fmt <file.ta>                 source format செய்து stdout-இல் காட்டு\n"
-            "  doctor                        Tamil font/locale சூழல் பரிசோதனை\n"
-            "  setup-konsole                 KDE Konsole Tamil font auto-setup\n"
-            "  version                       பதிப்பு\n"
-            "  help                          உதவி\n"
-            "\n(TA_LANG=en — English output mode)\n",
-            TA_VERSION, prog);
+static bool ensure_utf8_locale(void) {
+    const char *lc_all = getenv("LC_ALL");
+    const char *lc_ctype = getenv("LC_CTYPE");
+    const char *lang = getenv("LANG");
+
+    if (!lc_all && !lc_ctype && !lang) setlocale(LC_ALL, "C.UTF-8");
+
+    const char *codeset = nl_langinfo(CODESET);
+    if (codeset && (strcasecmp(codeset, "UTF-8") == 0 ||
+                    strcasecmp(codeset, "UTF8") == 0))
+        return true;
+
+    static const char *fallbacks[] = {"en_US.UTF-8", "en_GB.UTF-8", "C.UTF-8",
+                                      "ta_IN.UTF-8", "ta_LK.UTF-8", NULL};
+    for (int i = 0; fallbacks[i]; i++) {
+        if (setlocale(LC_ALL, fallbacks[i])) {
+            codeset = nl_langinfo(CODESET);
+            if (codeset && strcasecmp(codeset, "UTF-8") == 0) return true;
+        }
     }
+    return false;
 }
 
+static void usage(FILE *out, const char *prog) {
+    fprintf(out,
+            "Tamizhi v%s — தமிழ் நிரலாக்க மொழி\n\n",
+            TA_VERSION);
+    fprintf(out, "%s <கட்டளை> [வாதகங்கள்]\n\n", prog);
+    fputs(
+        "கோப்பு நீட்டிப்பு: .ta அல்லது .த\n"
+        "\n"
+        "இரு இயக்க முறைகள்: build → C போல native binary; run/repl → Python போல script\n"
+        "\n"
+        "கட்டளைகள்:\n"
+        "  build <file.ta> [-o output]   native executable உருவாக்கு\n"
+        "  run <file.ta>                 உடனடக்க இயக்கு\n"
+        "  check <file.ta>               வகைப்பார்வை மட்டும்\n"
+        "  repl                          இடைச்சேர்க்க உரையாடல்\n"
+        "  fmt <file.ta>                 நிரலை வடிவமைத்துக் காட்டு\n"
+        "  doctor                        எழுத்துரு/சூழல் பரிசோதனை\n"
+        "  setup-konsole                 Konsole-இல் தமிழ் எழுத்துரு அமை\n"
+        "  version                       பதிப்பு\n"
+        "  help                          உதவி\n", out);
+}
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     setlocale(LC_ALL, "");
-    /* TA_LANG=en → switch all CLI messages to English */
-    const char *talang = getenv("TA_LANG");
-    if (talang && (strcasecmp(talang, "en") == 0 ||
-                   strcasecmp(talang, "english") == 0))
-        g_english = true;
+    if (!ensure_utf8_locale()) {
+        fprintf(stderr,
+                "எச்சனமை: UTF-8 locale கண்டற்படவில்லை.\n"
+                "  தீர்வு: export LANG=ta_IN.UTF-8   (அல்லது en_US.UTF-8)\n\n");
+    }
     const char *prog = argc > 0 ? argv[0] : "ta";
     if (argc < 2) {
         usage(stderr, prog);
@@ -733,9 +727,7 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "setup-konsole") == 0) return cmd_setup_konsole();
     if (strcmp(cmd, "repl") == 0) return cmd_repl(prog);
 
-    fprintf(stderr, g_english
-        ? "Unknown command: '%s'\n\n"
-        : "தெரியாத கட்டளை: '%s'\n\n", cmd);
+    fprintf(stderr, "தெரியாத கட்டளை: '%s'\n\n", cmd);
     usage(stderr, prog);
     return 2;
 }

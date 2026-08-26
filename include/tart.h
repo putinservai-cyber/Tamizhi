@@ -57,6 +57,11 @@ void ta_rt_print_str(TaRtStr *s);
 void ta_rt_print_space(void);
 void ta_rt_print_nl(void);
 
+/* --- garbage collector (conservative mark-sweep) --- */
+void ta_rt_gc_collect(void);
+void ta_rt_gc_stats(int64_t *collections, int64_t *bytes_in_use);
+void ta_rt_gc_set_threshold(int64_t bytes);
+
 int64_t ta_rt_abs_i(int64_t v);
 double ta_rt_abs_f(double v);
 int64_t ta_rt_floor(double v);

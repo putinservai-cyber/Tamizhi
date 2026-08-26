@@ -5,6 +5,7 @@ LIB     := $(BUILD)/tart.o
 
 WARN    := -std=c11 -Wall -Wextra -Wpedantic -Werror
 CFLAGS  ?= -O2
+CFLAGS  += -finput-charset=UTF-8 -fexec-charset=UTF-8
 INC     := -Iinclude
 
 COMPILER_SRCS := $(wildcard src/common/*.c src/lexer/*.c src/parser/*.c src/ast/*.c src/semantic/*.c src/typecheck/*.c src/ir/*.c src/codegen/*.c src/cli/*.c)
@@ -48,7 +49,7 @@ $(LIB): src/runtime/tart.c include/tart.h
 
 $(BUILD)/tests/%: tests/unit/%.c $(filter-out $(BUILD)/src/cli/main.o,$(COMPILER_OBJS))
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(WARN) $(INC) -o $@ $< $(filter-out $(BUILD)/src/cli/main.o,$(COMPILER_OBJS))
+	$(CC) $(CFLAGS) $(WARN) $(INC) -o $@ $< $(filter-out $(BUILD)/src/cli/main.o,$(COMPILER_OBJS)) -lm
 
 test: all $(UNIT_BINS)
 	@for t in $(UNIT_BINS); do ./$$t || exit 1; done

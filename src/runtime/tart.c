@@ -1,6 +1,9 @@
+#define _GNU_SOURCE
 #include "tart.h"
 
 #include <inttypes.h>
+#include <stdint.h>
+#include <setjmp.h>
 #include <stdbool.h>
 #include <math.h>
 #include <stdio.h>
@@ -13,7 +16,7 @@ static void rt_fail(const char *msg) {
 }
 
 void ta_rt_abort_div_zero(void) {
-    rt_fail("\u0baa\u0bc2\u0bb0\u0bbf\u0baf\u0bbe\u0bb2\u0bcd \u0bb5\u0b95\u0bc1\u0ba4\u0bcd\u0ba4\u0bae\u0bcd (division by zero)");
+    rt_fail("\u0baa\u0bc2\u0bb0\u0bbf\u0baf\u0bbe\u0bb2\u0bcd \u0bb5\u0b95\u0bc1\u0ba4\u0bcd\u0ba4\u0bae\u0bcd");
 }
 
 void ta_rt_abort_index(int64_t idx, int64_t len) {
@@ -25,10 +28,247 @@ void ta_rt_abort_index(int64_t idx, int64_t len) {
 }
 
 void ta_rt_abort_key(void) {
-    rt_fail("\u0b95\u0bc1\u0bb1\u0bbf\u0baa\u0bcd\u0baa\u0bbf\u0b9f\u0baa\u0bcd\u0baa\u0b9f\u0bcd\u0b9f \u0b9a\u0bbe\u0bb5\u0bbf \u0b85\u0b95\u0bb0\u0bbe\u0ba4\u0bbf\u0baf\u0bbf\u0bb2\u0bcd \u0b87\u0bb2\u0bcd\u0bb2\u0bc8 (key not found)");
+    rt_fail("\u0b95\u0bc1\u0bb1\u0bbf\u0baa\u0bcd\u0baa\u0bbf\u0b9f\u0baa\u0bcd\u0baa\u0b9f\u0bcd\u0b9f \u0b9a\u0bbe\u0bb5\u0bbf \u0b85\u0b95\u0bb0\u0bbe\u0ba4\u0bbf\u0baf\u0bbf\u0bb2\u0bcd \u0b87\u0bb2\u0bcd\u0bb2\u0bc8");
 }
 
+/* ================= conservative mark-sweep GC =================
+   structure follows "Baby's First Garbage Collector", adapted:
+   roots = machine stack + callee-saved regs (setjmp), because the
+   generated program keeps every value in rbp frame slots. */
+
+typedef struct TaGcHead {
+    struct TaGcHead *next;
+    size_t size;
+    uint8_t marked;
+    uint8_t type;          /* 0 raw, 1 str, 2 list, 3 dict */
+} TaGcHead;
+
+#define TA_GC_HDR ((sizeof(TaGcHead) + 15) & ~(size_t)15)
+
+static TaGcHead *gc_objects = NULL;
+static int64_t gc_collections = 0;
+static size_t gc_in_use = 0;
+static size_t gc_threshold = 8u * 1024u * 1024u;
+static size_t gc_since = 0;
+static void *gc_stack_bottom = NULL;
+static int gc_disabled = -1;
+static int gc_stats_env = -1;
+
+/* Determine the real top of the stack. The previously used
+   __attribute__((constructor)) trick captured a stale/low address
+   (constructors run on the dynamic loader's stack, abandoned before
+   main), so the conservative scan window was far too small and missed
+   every live root. We read the authoritative stack extent from
+   /proc/self/maps (the "[stack]" region's end address), which is correct
+   for the main thread regardless of loader quirks. */
+static void gc_init_stack_bounds(void) {
+    static int done = 0;
+    if (done) return;
+    done = 1;
+    FILE *m = fopen("/proc/self/maps", "r");
+    if (!m) return;
+    char line[512];
+    while (fgets(line, sizeof(line), m)) {
+        /* format: start-end perms offset dev inode path */
+        unsigned long long start = 0, end = 0;
+        char path[256] = {0};
+        if (sscanf(line, "%llx-%llx %*s %*s %*s %*s %255[^\n]",
+                   &start, &end, path) == 3) {
+            if (strstr(path, "[stack]")) {
+                gc_stack_bottom = (void *)(uintptr_t)end;
+                break;
+            }
+        }
+    }
+    fclose(m);
+}
+
+static int gc_enabled(void) {
+    if (gc_disabled < 0) {
+        const char *e = getenv("TA_GC");
+        gc_disabled = (e && strcmp(e, "0") == 0) ? 1 : 0;
+    }
+    return !gc_disabled;
+}
+
+void ta_rt_gc_set_threshold(int64_t bytes) {
+    if (bytes > 0) gc_threshold = (size_t)bytes;
+}
+
+void ta_rt_gc_stats(int64_t *collections, int64_t *bytes_in_use) {
+    if (collections) *collections = gc_collections;
+    if (bytes_in_use) *bytes_in_use = (int64_t)gc_in_use;
+}
+
+static void gc_mark_block(void *user);
+static void gc_trace_object(TaGcHead *h);
+
+static void gc_release_user(void *user) {
+    if (!user) return;
+    /* header is always at a fixed offset before the user pointer */
+    TaGcHead *h = (TaGcHead *)((char *)user - TA_GC_HDR);
+    TaGcHead **link = &gc_objects;
+    while (*link && *link != h) link = &(*link)->next;
+    if (*link) {
+        *link = h->next;
+        gc_in_use -= h->size;
+        free(h);
+    }
+}
+
+static void gc_scan_range(const char *lo, const char *hi) {
+    for (const char *p = lo; p + sizeof(void *) <= hi; p += sizeof(void *)) {
+        void *cand;
+        memcpy(&cand, p, sizeof(cand));
+        if (!cand) continue;
+        /* fast reject: only heap-ish addresses matter at toy scale we walk */
+        for (TaGcHead *h = gc_objects; h; h = h->next)
+            if ((char *)h + TA_GC_HDR == (char *)cand) {
+                if (!h->marked) {
+                    h->marked = 1;
+                    gc_mark_block(cand);
+                }
+                break;
+            }
+    }
+}
+
+static void gc_mark_block(void *user) {
+    if (!user) return;
+    for (TaGcHead *h = gc_objects; h; h = h->next) {
+        if ((char *)h + TA_GC_HDR == (char *)user) {
+            if (!h->marked) {
+                h->marked = 1;
+                gc_trace_object(h);
+            }
+            return;
+        }
+    }
+}
+
+static void gc_trace_object(TaGcHead *h) {
+    void *u = (char *)h + TA_GC_HDR;
+    if (h->type == 2) {
+        TaRtList *l = (TaRtList *)u;
+        for (int64_t i = 0; i < l->len; i++)
+            gc_scan_range((const char *)&l->cells[i],
+                          (const char *)&l->cells[i] + 8);
+    } else if (h->type == 3) {
+        TaRtDict *d = (TaRtDict *)u;
+        gc_mark_block(d->state);
+        gc_mark_block(d->keys);
+        gc_mark_block(d->vals);
+        if (d->state && d->keys && d->vals) {
+            for (int64_t i = 0; i < d->cap; i++) {
+                if (!d->state[i]) continue;
+                gc_scan_range((char *)d->keys + i * 8,
+                              (char *)d->keys + i * 8 + 8);
+                gc_scan_range((char *)d->vals + i * 8,
+                              (char *)d->vals + i * 8 + 8);
+            }
+        }
+    }
+}
+
+static void gc_collect_inner(const char *why) {
+    jmp_buf regs;
+    setjmp(regs);
+
+    gc_init_stack_bounds();
+
+    char here_addr_buf = 0;
+    const char *here_addr = &here_addr_buf;
+    /* scan from this (deepest live) frame up to the real stack top */
+    const char *lo = here_addr;
+    const char *hi = (const char *)gc_stack_bottom;
+    if (lo > hi) { const char *t = lo; lo = hi; hi = t; }
+    /* Conservative scanning reads 8-byte-aligned pointer slots; the scan
+       window must be 8-byte aligned or a slot straddles two windows and is
+       never seen as a whole pointer (silently missing live roots). */
+    lo = (const char *)((uintptr_t)lo & ~(uintptr_t)7);
+    hi = (const char *)(((uintptr_t)hi + 7) & ~(uintptr_t)7);
+    gc_scan_range(lo, hi);
+    gc_scan_range((const char *)regs, (const char *)regs + sizeof(jmp_buf));
+
+    /* fixpoint trace of marked containers.
+       Conservative scanning can surface a new root mid-traversal, and a
+       container marked later must still have its children walked, so we
+       repeat until the live set is stable. */
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (TaGcHead *h = gc_objects; h; h = h->next) {
+            if (!h->marked || h->type < 2) continue;
+            size_t live_before = 0;
+            for (TaGcHead *q = gc_objects; q; q = q->next) live_before += q->marked;
+            gc_trace_object(h);
+            size_t live_after = 0;
+            for (TaGcHead *q = gc_objects; q; q = q->next) live_after += q->marked;
+            if (live_after != live_before) changed = true;
+        }
+    }
+
+    {
+        static int dbg = -1;
+        if (dbg < 0) { const char *e = getenv("TA_GC_DEBUG"); dbg = e ? 1 : 0; }
+        if (dbg) {
+            size_t n = 0, mk = 0; for (TaGcHead *q = gc_objects; q; q = q->next) { n++; mk += q->marked; }
+            fprintf(stderr, "[ta-gc-debug] %s: %zu/%zu objects live, %zu bytes in use (lo=%p hi=%p)\n",
+                    why, mk, n, gc_in_use, (void *)lo, (void *)hi);
+        }
+    }
+
+    size_t freed_bytes = 0;
+    TaGcHead **link = &gc_objects;
+    while (*link) {
+        TaGcHead *h = *link;
+        if (h->marked) {
+            h->marked = 0;
+            link = &h->next;
+        } else {
+            *link = h->next;
+            freed_bytes += h->size;
+            free(h);
+        }
+    }
+    gc_in_use -= freed_bytes;
+    gc_since = 0;
+    gc_collections++;
+    if (gc_stats_env < 0) {
+        const char *e = getenv("TA_GC_STATS");
+        gc_stats_env = e ? 1 : 0;
+    }
+    if (gc_stats_env)
+        fprintf(stderr, "[ta-gc] %s: %zu bytes live after collect #%lld\n",
+                why, gc_in_use, (long long)gc_collections);
+}
+
+void ta_rt_gc_collect(void) { gc_collect_inner("manual"); }
+
 static void *rt_alloc(size_t n) {
+    if (n < 8) n = 8;
+    if (gc_enabled()) {
+        TaGcHead *h = malloc(TA_GC_HDR + n);
+        if (!h) rt_fail("\u0ba8\u0bbf\u0ba9\u0bc8\u0bb5\u0b95\u0bae\u0bcd \u0baa\u0bcb\u0ba4\u0bb5\u0bbf\u0bb2\u0bcd\u0bb2\u0bc8");
+        memset((char *)h + TA_GC_HDR, 0, n);
+        h->next = NULL;
+        h->size = n;
+        h->marked = 0;
+        h->type = 0;
+        /* Collect BEFORE linking the new block into gc_objects. Otherwise a
+           collection triggered by this very allocation would see the fresh
+           object in the live set but unrooted (only in a register) and free
+           it, leaving the caller with a dangling pointer. */
+        if (gc_since + n > gc_threshold) {
+            gc_collect_inner("alloc");
+            if (gc_since + n > gc_threshold / 2) gc_threshold *= 2;
+        }
+        h->next = gc_objects;
+        gc_objects = h;
+        gc_in_use += n;
+        gc_since += n;
+        return (char *)h + TA_GC_HDR;
+    }
     void *p = calloc(1, n ? n : 1);
     if (!p) rt_fail("\u0ba8\u0bbf\u0ba9\u0bc8\u0bb5\u0b95\u0bae\u0bcd \u0baa\u0bcb\u0ba4\u0bb5\u0bbf\u0bb2\u0bcd\u0bb2\u0bc8");
     return p;
@@ -37,7 +277,9 @@ static void *rt_alloc(size_t n) {
 TaRtList *ta_rt_list_new_n(int64_t n) {
     if (n < 0) n = 0;
     TaRtList *l = rt_alloc(sizeof(TaRtList) + (size_t)n * 8);
+    ((TaGcHead *)((char *)l - TA_GC_HDR))->type = 2;
     l->len = n;
+    
     return l;
 }
 
@@ -93,6 +335,7 @@ static uint64_t rt_key_hash(void *k, int64_t key_is_str) {
 
 TaRtDict *ta_rt_dict_new(void) {
     TaRtDict *d = rt_alloc(sizeof(TaRtDict));
+    ((TaGcHead *)((char *)d - TA_GC_HDR))->type = 3;
     d->cap = 8;
     d->state = rt_alloc((size_t)d->cap);
     d->keys = rt_alloc((size_t)d->cap * 8);
@@ -146,15 +389,16 @@ static void dict_grow(TaRtDict *d, int64_t key_is_str) {
             ta_rt_dict_set(&nd, k, v, key_is_str);
         }
     }
-    free(d->state);
-    free(d->keys);
-    free(d->vals);
+    gc_release_user(d->state);
+    gc_release_user(d->keys);
+    gc_release_user(d->vals);
     *d = nd;
 }
 
 TaRtStr *ta_rt_str_new(int64_t len) {
     if (len < 0) len = 0;
     TaRtStr *s = rt_alloc(sizeof(TaRtStr) + (size_t)len + 1);
+    ((TaGcHead *)((char *)s - TA_GC_HDR))->type = 1;
     s->len = len;
     s->data[len] = 0;
     return s;

@@ -1,5 +1,13 @@
 # சிக்கல் தீர்வு / Troubleshooting — Tamil rendering
 
+## Step 0: one-shot fixes
+
+```bash
+ta setup-konsole     # inside KDE Konsole: picks best Tamil font, applies it to
+                     # the live session AND patches your default profile
+source scripts/ta_env.sh   # sets UTF-8 locale + puts build/ on PATH
+```
+
 ## Step 1: run the built-in check
 
 ```bash
@@ -47,5 +55,9 @@ more comfortable than any terminal.
   control characters become `?`.
 - Carets align by **grapheme cluster** (base letter + matras = one column), so
   markers sit under the right glyph in any conforming terminal.
-- `setlocale(LC_ALL, "")` is called at startup; a UTF-8 locale is recommended
+- `setlocale(LC_ALL, "")` runs at startup; if no UTF-8 locale can be found,
+  messages fall back to English automatically (with a warning). Sources are
+  compiled with explicit `-finput-charset=UTF-8 -fexec-charset=UTF-8`.
+- A UTF-8 locale is recommended (`LANG=en_US.UTF-8` or `ta_IN.UTF-8`).
+- Previous anchor kept for reference:
   (`LANG=en_US.UTF-8` or `ta_IN.UTF-8`).
