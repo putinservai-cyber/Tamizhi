@@ -34,7 +34,7 @@ static bool match(Parser *p, TaTokenType t) {
 }
 
 static char *safe_trunc(const char *s, size_t max_bytes) {
-    static char tbuf[192];
+    static _Thread_local char tbuf[192];
     size_t n = ta_utf8_truncate_bytes(s ? s : "", max_bytes);
     if (n >= sizeof(tbuf)) n = sizeof(tbuf) - 1;
     memcpy(tbuf, s ? s : "", n);
@@ -43,7 +43,7 @@ static char *safe_trunc(const char *s, size_t max_bytes) {
 }
 
 static char *describe_token(const TaToken *tk) {
-    static char buf[256];
+    static _Thread_local char buf[256];
     switch (tk->type) {
         case TK_EOF: snprintf(buf, sizeof(buf), "'நிரல் முடிவு'"); break;
         case TK_NEWLINE: snprintf(buf, sizeof(buf), "'வரி முடிவு'"); break;
@@ -95,12 +95,21 @@ static bool expect(Parser *p, TaTokenType t, const char *what, const char *hint)
 static void panic_sync_stmt(Parser *p) {
     int guard = 0;
     for (;;) {
-        TaTokenType t = peek(p)->type;
+        TaToken *tk = peek(p);
+        TaTokenType t = tk->type;
         if (t == TK_NEWLINE) {
             advance(p);
             return;
         }
         if (t == TK_DEDENT || t == TK_EOF || t == TK_INDENT) return;
+        /* Resume at the next top-level definition so a syntax error in one
+           function does not abort parsing of the rest of the file. */
+        if (tk->col == 0 &&
+            (t == TK_FUNC || t == TK_VAR || t == TK_CONST || t == TK_IF ||
+             t == TK_WHILE || t == TK_FOR || t == TK_RETURN || t == TK_BREAK ||
+             t == TK_CONTINUE)) {
+            return;
+        }
         advance(p);
         if (++guard > 4096) return;
     }

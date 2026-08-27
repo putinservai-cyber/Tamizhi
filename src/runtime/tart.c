@@ -12,6 +12,10 @@
 #include <string.h>
 #include <ctype.h>
 
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+#include <pthread.h>
+#endif
+
 static void rt_fail(const char *msg) {
     fprintf(stderr, "\u0b87\u0baf\u0b95\u0bcd\u0b95 \u0ba8\u0bc7\u0bb0\u0bcd \u0baa\u0bbf\u0bb4\u0bc8: %s\n", msg);
     exit(70);
@@ -56,32 +60,47 @@ static void *gc_stack_bottom = NULL;
 static int gc_disabled = -1;
 static int gc_stats_env = -1;
 
-/* Determine the real top of the stack. The previously used
-   __attribute__((constructor)) trick captured a stale/low address
-   (constructors run on the dynamic loader's stack, abandoned before
-   main), so the conservative scan window was far too small and missed
-   every live root. We read the authoritative stack extent from
-   /proc/self/maps (the "[stack]" region's end address), which is correct
-   for the main thread regardless of loader quirks. */
+/* Determine the real top of the stack (conservative scan upper bound).
+   Linux: parse /proc/self/maps for the "[stack]" region's end address.
+   macOS / *BSD: use the pthread stack-address APIs.
+   Other platforms: fall back to the address of a local variable. */
 static void gc_init_stack_bounds(void) {
     static atomic_int gc_init_done = 0;
     if (atomic_exchange(&gc_init_done, 1)) return;
+
+#if defined(__linux__)
     FILE *m = fopen("/proc/self/maps", "r");
-    if (!m) return;
-    char line[512];
-    while (fgets(line, sizeof(line), m)) {
-        /* format: start-end perms offset dev inode path */
-        unsigned long long start = 0, end = 0;
-        char path[256] = {0};
-        if (sscanf(line, "%llx-%llx %*s %*s %*s %*s %255[^\n]",
-                   &start, &end, path) == 3) {
-            if (strstr(path, "[stack]")) {
-                gc_stack_bottom = (void *)(uintptr_t)end;
-                break;
+    if (m) {
+        char line[512];
+        while (fgets(line, sizeof(line), m)) {
+            unsigned long long start = 0, end = 0;
+            char path[256] = {0};
+            if (sscanf(line, "%llx-%llx %*s %*s %*s %*s %255[^\n]",
+                       &start, &end, path) == 3) {
+                if (strstr(path, "[stack]")) {
+                    gc_stack_bottom = (void *)(uintptr_t)end;
+                    break;
+                }
             }
         }
+        fclose(m);
+        return;
     }
-    fclose(m);
+#endif
+
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+    void *base = pthread_get_stackaddr_np(pthread_self());
+    size_t size = pthread_get_stacksize_np(pthread_self());
+    /* pthread reports the *lowest* address; the top is base + size. */
+    gc_stack_bottom = (void *)((uintptr_t)base + size);
+    return;
+#endif
+
+    /* Unknown platform: fall back to a conservative bound that covers the
+       whole program image (data/BSS + heap + stack). Over-estimation is safe
+       for a conservative collector; this branch only runs on unsupported OSes. */
+    static int sentinel;
+    gc_stack_bottom = (void *)&sentinel;
 }
 
 static int gc_enabled(void) {
@@ -319,10 +338,14 @@ static void *rt_alloc(size_t n) {
 
 TaRtList *ta_rt_list_new_n(int64_t n) {
     if (n < 0) n = 0;
+    /* Overflow guard: (size_t)n * 8 must not wrap around size_t. */
+    if ((uint64_t)n > SIZE_MAX / 8) {
+        rt_fail("\u0ba8\u0bbf\u0ba9\u0bc8\u0bb5\u0b95\u0bae\u0bcd \u0baa\u0bcb\u0ba4\u0bb5\u0bbf\u0bb2\u0bcd\u0bb2\u0bc8");
+    }
     TaRtList *l = rt_alloc(sizeof(TaRtList) + (size_t)n * 8);
     ((TaGcHead *)((char *)l - TA_GC_HDR))->type = 2;
     l->len = n;
-    
+
     return l;
 }
 
@@ -334,6 +357,24 @@ void *ta_rt_list_get(TaRtList *l, int64_t i) {
 void ta_rt_list_set(TaRtList *l, int64_t i, void *src) {
     if (!l || i < 0 || i >= l->len) ta_rt_abort_index(i, l ? l->len : 0);
     memcpy(&l->cells[i], src, 8);
+}
+
+/* Immutable push: returns a NEW list with `elem` appended. */
+TaRtList *ta_rt_list_push(TaRtList *l, void *elem) {
+    int64_t old = l ? l->len : 0;
+    TaRtList *nl = ta_rt_list_new_n(old + 1);
+    for (int64_t i = 0; i < old; i++) nl->cells[i] = l->cells[i];
+    nl->cells[old] = (uint64_t)(uintptr_t)elem;
+    return nl;
+}
+
+/* Immutable pop: returns a NEW list with the last element removed. */
+TaRtList *ta_rt_list_pop(TaRtList *l) {
+    int64_t old = l ? l->len : 0;
+    if (old == 0) return ta_rt_list_new_n(0);
+    TaRtList *nl = ta_rt_list_new_n(old - 1);
+    for (int64_t i = 0; i < old - 1; i++) nl->cells[i] = l->cells[i];
+    return nl;
 }
 
 static uint64_t rt_hash_str(const char *s, size_t n) {
@@ -418,6 +459,37 @@ void *ta_rt_dict_get(TaRtDict *d, void *key, int64_t key_is_str) {
     }
 }
 
+TaRtList *ta_rt_dict_keys(TaRtDict *d) {
+    if (!d) return ta_rt_list_new_n(0);
+    size_t cnt = 0;
+    for (int64_t i = 0; i < d->cap; i++) if (d->state[i]) cnt++;
+    TaRtList *keys = ta_rt_list_new_n((int64_t)cnt);
+    size_t pos = 0;
+    for (int64_t i = 0; i < d->cap; i++) {
+        if (d->state[i]) {
+            keys->cells[pos++] = *(uint64_t *)((char *)d->keys + i * 8);
+        }
+    }
+    return keys;
+}
+
+TaRtList *ta_rt_dict_items(TaRtDict *d) {
+    if (!d) return ta_rt_list_new_n(0);
+    size_t cnt = 0;
+    for (int64_t i = 0; i < d->cap; i++) if (d->state[i]) cnt++;
+    TaRtList *items = ta_rt_list_new_n((int64_t)cnt);
+    size_t pos = 0;
+    for (int64_t i = 0; i < d->cap; i++) {
+        if (d->state[i]) {
+            TaRtList *pair = ta_rt_list_new_n(2);
+            pair->cells[0] = *(uint64_t *)((char *)d->keys + i * 8);
+            pair->cells[1] = *(uint64_t *)((char *)d->vals + i * 8);
+            items->cells[pos++] = (uint64_t)(uintptr_t)pair;
+        }
+    }
+    return items;
+}
+
 static void dict_grow(TaRtDict *d, int64_t key_is_str) {
     TaRtDict nd;
     nd.cap = d->cap * 2;
@@ -438,13 +510,36 @@ static void dict_grow(TaRtDict *d, int64_t key_is_str) {
     *d = nd;
 }
 
+static void fill_cp_len(TaRtStr *s);
+
+/* Declared here so fill_cp_len (defined above) can use it before its
+   definition later in this file. */
+static const uint8_t rt_utf8_len[256];
+
 TaRtStr *ta_rt_str_new(int64_t len) {
     if (len < 0) len = 0;
     TaRtStr *s = rt_alloc(sizeof(TaRtStr) + (size_t)len + 1);
     ((TaGcHead *)((char *)s - TA_GC_HDR))->type = 1;
     s->len = len;
     s->data[len] = 0;
+    s->cp_len = -1;   /* computed lazily by ta_rt_str_at / ta_rt_str_sub */
     return s;
+}
+
+/* Count and cache the number of UTF-8 code points in s->data. */
+static void fill_cp_len(TaRtStr *s) {
+    if (!s) return;
+    int64_t cp = 0;
+    size_t pos = 0;
+    while (pos < (size_t)s->len) {
+        uint8_t c = (uint8_t)s->data[pos];
+        size_t cl = rt_utf8_len[c];
+        if (cl == 0) cl = 1;
+        if ((size_t)(pos + cl) > (size_t)s->len) cl = 1;
+        pos += cl;
+        cp++;
+    }
+    s->cp_len = cp;
 }
 
 TaRtStr *ta_rt_str_concat(TaRtStr *a, TaRtStr *b) {
@@ -485,23 +580,15 @@ static const uint8_t rt_utf8_len[256] = {
 
 int64_t ta_rt_str_at(TaRtStr *s, int64_t i) {
     if (!s) ta_rt_abort_index(i, 0);
-    /* Count code points so negative indices can wrap (Python-style). */
-    int64_t ncp = 0;
-    size_t pos = 0;
-    while (pos < (size_t)s->len) {
-        uint8_t c = (uint8_t)s->data[pos];
-        size_t cl = rt_utf8_len[c];
-        if (cl == 0) cl = 1;
-        if ((size_t)(pos + cl) > (size_t)s->len) cl = 1;
-        ncp++;
-        pos += cl;
-    }
+    /* Use the cached code-point count (computed once, O(1) on later calls). */
+    if (s->cp_len < 0) fill_cp_len(s);
+    int64_t ncp = s->cp_len;
     int64_t idx = i;
     if (idx < 0) idx += ncp;
     if (idx < 0 || idx >= ncp) ta_rt_abort_index(i, ncp);
 
     int64_t cp_index = 0;
-    pos = 0;
+    size_t pos = 0;
     while (pos < (size_t)s->len) {
         uint8_t c = (uint8_t)s->data[pos];
         size_t cl = rt_utf8_len[c];
@@ -520,14 +607,43 @@ int64_t ta_rt_str_at(TaRtStr *s, int64_t i) {
     return -1;
 }
 
-TaRtStr *ta_rt_str_sub(TaRtStr *s, int64_t start, int64_t end) {
+/* Internal helper: slice by raw byte offsets (used by split/strip/replace). */
+static TaRtStr *str_sub_bytes(TaRtStr *s, size_t start, size_t end) {
     if (!s) return ta_rt_str_new(0);
-    if (start < 0) start = 0;
-    if (end > s->len) end = s->len;
+    if (end > (size_t)s->len) end = (size_t)s->len;
     if (end <= start) return ta_rt_str_new(0);
-    TaRtStr *out = ta_rt_str_new(end - start);
+    TaRtStr *out = ta_rt_str_new((int64_t)(end - start));
     memcpy(out->data, s->data + start, (size_t)(end - start));
     return out;
+}
+
+/* Map a code-point index to its starting byte offset. Returns s->len (one past
+   the end) if the index is at or past the end of the string. */
+static size_t cp_index_to_byte(const TaRtStr *s, int64_t cp_index) {
+    size_t pos = 0;
+    int64_t cur = 0;
+    while (pos < (size_t)s->len && cur < cp_index) {
+        uint8_t c = (uint8_t)s->data[pos];
+        size_t cl = rt_utf8_len[c];
+        if (cl == 0) cl = 1;
+        if ((size_t)(pos + cl) > (size_t)s->len) cl = 1;
+        pos += cl;
+        cur++;
+    }
+    return pos;
+}
+
+/* Public API: slice by Unicode code-point indices (Python-style semantics). */
+TaRtStr *ta_rt_str_sub(TaRtStr *s, int64_t start_cp, int64_t end_cp) {
+    if (!s) return ta_rt_str_new(0);
+    if (s->cp_len < 0) fill_cp_len(s);
+    int64_t n = s->cp_len;
+    if (start_cp < 0) start_cp = 0;
+    if (end_cp > n) end_cp = n;
+    if (end_cp <= start_cp) return ta_rt_str_new(0);
+    size_t start_b = cp_index_to_byte(s, start_cp);
+    size_t   end_b = cp_index_to_byte(s, end_cp);
+    return str_sub_bytes(s, start_b, end_b);
 }
 
 TaRtList *ta_rt_str_split(TaRtStr *s, TaRtStr *sep) {
@@ -559,7 +675,7 @@ TaRtList *ta_rt_str_split(TaRtStr *s, TaRtStr *sep) {
     n++;
     TaRtList *l = ta_rt_list_new_n((int64_t)n);
     for (size_t k = 0; k < n; k++) {
-        TaRtStr *piece = ta_rt_str_sub(s, (int64_t)rng[2 * k], (int64_t)rng[2 * k + 1]);
+        TaRtStr *piece = str_sub_bytes(s, rng[2 * k], rng[2 * k + 1]);
         ta_rt_list_set(l, (int64_t)k, &piece);
     }
     free(rng);
@@ -597,12 +713,12 @@ TaRtStr *ta_rt_str_strip(TaRtStr *s) {
     size_t start = 0, end = (size_t)s->len;
     while (start < end && isspace((unsigned char)s->data[start])) start++;
     while (end > start && isspace((unsigned char)s->data[end - 1])) end--;
-    return ta_rt_str_sub(s, (int64_t)start, (int64_t)end);
+    return str_sub_bytes(s, start, end);
 }
 
 TaRtStr *ta_rt_str_replace(TaRtStr *s, TaRtStr *old, TaRtStr *new) {
     if (!s) return ta_rt_str_new(0);
-    if (!old || old->len == 0) return ta_rt_str_sub(s, 0, s->len);
+    if (!old || old->len == 0) return str_sub_bytes(s, 0, (size_t)s->len);
     size_t slen = (size_t)s->len, olen = (size_t)old->len;
     size_t nlen = (new && new->len) ? (size_t)new->len : 0;
     size_t count = 0, i = 0;
@@ -654,17 +770,73 @@ int64_t ta_rt_str_endswith(TaRtStr *s, TaRtStr *p) {
     return memcmp(s->data + (s->len - p->len), p->data, (size_t)p->len) == 0 ? 1 : 0;
 }
 
-TaRtStr *ta_rt_input(void) {
-    char *buf = NULL;
-    size_t cap = 0;
-    ssize_t n = getline(&buf, &cap, stdin);
-    if (n < 0) {
-        free(buf);
-        return ta_rt_str_new(0);
+/* Returns the code-point index of the first occurrence of `sub` in `s`,
+   or -1 if not found. */
+int64_t ta_rt_str_find(TaRtStr *s, TaRtStr *sub) {
+    if (!s || !sub || sub->len == 0) return -1;
+    const char *p = memmem(s->data, (size_t)s->len, sub->data, (size_t)sub->len);
+    if (!p) return -1;
+    size_t off = (size_t)(p - s->data);
+    int64_t cp = 0;
+    size_t pos = 0;
+    while (pos < off) {
+        uint8_t c = (uint8_t)s->data[pos];
+        size_t cl = rt_utf8_len[c];
+        if (cl == 0) cl = 1;
+        if (pos + cl > (size_t)s->len) cl = 1;
+        pos += cl;
+        cp++;
     }
-    while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) n--;
-    TaRtStr *s = ta_rt_str_new(n);
-    if (n) memcpy(s->data, buf, (size_t)n);
+    return cp;
+}
+
+/* Counts (non-overlapping) occurrences of `sub` in `s`. */
+int64_t ta_rt_str_count(TaRtStr *s, TaRtStr *sub) {
+    if (!s || !sub || sub->len == 0) return 0;
+    int64_t count = 0;
+    size_t i = 0, slen = (size_t)s->len, plen = (size_t)sub->len;
+    while (i + plen <= slen) {
+        if (memcmp(s->data + i, sub->data, plen) == 0) {
+            count++;
+            i += plen;
+        } else {
+            i++;
+        }
+    }
+    return count;
+}
+
+void ta_rt_assert(int64_t cond, TaRtStr *msg) {
+    if (cond) return;
+    fprintf(stderr, "\u0b89\u0bb1\u0b95\u0bcd\u0b95 \u0ba8\u0bbf\u0bb0\u0bc2\u0baa\u0ba3\u0bc8: ");
+    if (msg && msg->len) fwrite(msg->data, 1, (size_t)msg->len, stderr);
+    else fputs("\u0baa\u0bb0\u0bbf\u0b9a\u0bcb\u0ba4\u0ba9\u0bae\u0bc8", stderr);
+    fputc('\n', stderr);
+    exit(70);
+}
+
+TaRtStr *ta_rt_input(void) {
+    size_t cap = 128;
+    size_t len = 0;
+    char *buf = malloc(cap);
+    if (!buf) rt_fail("\u0ba8\u0bbf\u0ba9\u0bc8\u0bb5\u0b95\u0bae\u0bcd \u0baa\u0bcb\u0ba4\u0bb5\u0bbf\u0bb2\u0bcd\u0bb2\u0bc8");
+    int c;
+    while ((c = fgetc(stdin)) != EOF && c != '\n' && c != '\r') {
+        if (len + 1 >= cap) {
+            cap *= 2;
+            char *nb = realloc(buf, cap);
+            if (!nb) { free(buf); rt_fail("\u0ba8\u0bbf\u0ba9\u0bc8\u0bb5\u0b95\u0bae\u0bcd \u0baa\u0bcb\u0ba4\u0bb5\u0bbf\u0bb2\u0bcd\u0bb2\u0bc8"); }
+            buf = nb;
+        }
+        buf[len++] = (char)(unsigned char)c;
+    }
+    /* Tolerate a following LF after a CR (CRLF). */
+    if (c == '\r') {
+        int nxt = fgetc(stdin);
+        if (nxt != '\n' && nxt != EOF) ungetc(nxt, stdin);
+    }
+    TaRtStr *s = ta_rt_str_new((int64_t)len);
+    if (len) memcpy(s->data, buf, len);
     free(buf);
     return s;
 }

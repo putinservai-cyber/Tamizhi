@@ -620,12 +620,15 @@ bool ta_codegen_emit(TaIrUnit *unit, TaStrBuf *out_asm) {
     }
 
     if (unit->nstrings > 0) {
-        ta_sb_puts(out_asm, ".section .rodata\n");
+        /* Writable data: the runtime caches code-point count (cp_len) here.
+           Layout must match struct TaRtStr { int64_t len; int64_t cp_len; char data[]; }. */
+        ta_sb_puts(out_asm, ".section .data\n");
         for (size_t i = 0; i < unit->nstrings; i++) {
             ta_sb_printf(out_asm, "LS%zu:\n", i);
             const unsigned char *s = (const unsigned char *)unit->strings[i];
             size_t len = unit->string_lens[i];
             ta_sb_printf(out_asm, "    .quad %zu\n", len);
+            ta_sb_printf(out_asm, "    .quad -1\n");   /* cp_len: lazily computed */
             for (size_t k = 0; k < len; k++) {
                 if (k % 16 == 0) ta_sb_puts(out_asm, "    .byte ");
                 ta_sb_printf(out_asm, "%u", (unsigned)s[k]);
@@ -634,6 +637,7 @@ bool ta_codegen_emit(TaIrUnit *unit, TaStrBuf *out_asm) {
             }
             ta_sb_puts(out_asm, "    .byte 0\n");
         }
+        ta_sb_puts(out_asm, ".section .text\n");
     }
 
     free(c.fpool);

@@ -1,0 +1,11 @@
+செயலி biglist():
+    மாறி L = வரம்பு(400000)
+    # allocate a big string to trigger GC
+    மாறி s = ""
+    ஒவ்வொன்றும் i இல் வரம்பு(200000):
+        s = s + "a"
+    மாறி sum = 0
+    ஒவ்வொன்றும் i இல் வரம்பு(5):
+        sum = sum + L[i]
+    திருப்பு sum
+அச்சிடு("biglist:", biglist())

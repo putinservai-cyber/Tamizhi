@@ -382,6 +382,46 @@ static TaOperand gen_call(TirCtx *c, TaExpr *e) {
                 TaOperand a[2] = {a0, a1};
                 return emit_rt(c, "ta_rt_str_endswith", a, 2, ta_ty_bool());
             }
+            case TA_BI_LIST_PUSH: {
+                TaOperand a0 = gen_expr(c, e->as.call.args[0]);
+                TaOperand a1 = gen_expr(c, e->as.call.args[1]);
+                TaOperand a[2] = {a0, a1};
+                return emit_rt(c, "ta_rt_list_push", a, 2, ta_ty_list(ta_ty_unknown()));
+            }
+            case TA_BI_LIST_POP: {
+                TaOperand a0 = gen_expr(c, e->as.call.args[0]);
+                TaOperand a[1] = {a0};
+                return emit_rt(c, "ta_rt_list_pop", a, 1, ta_ty_list(ta_ty_unknown()));
+            }
+            case TA_BI_DICT_KEYS: {
+                TaOperand a0 = gen_expr(c, e->as.call.args[0]);
+                TaOperand a[1] = {a0};
+                return emit_rt(c, "ta_rt_dict_keys", a, 1, ta_ty_list(ta_ty_unknown()));
+            }
+            case TA_BI_DICT_ITEMS: {
+                TaOperand a0 = gen_expr(c, e->as.call.args[0]);
+                TaOperand a[1] = {a0};
+                return emit_rt(c, "ta_rt_dict_items", a, 1, ta_ty_list(ta_ty_list(ta_ty_unknown())));
+            }
+            case TA_BI_STR_FIND: {
+                TaOperand a0 = gen_expr(c, e->as.call.args[0]);
+                TaOperand a1 = gen_expr(c, e->as.call.args[1]);
+                TaOperand a[2] = {a0, a1};
+                return emit_rt(c, "ta_rt_str_find", a, 2, ta_ty_int());
+            }
+            case TA_BI_STR_COUNT: {
+                TaOperand a0 = gen_expr(c, e->as.call.args[0]);
+                TaOperand a1 = gen_expr(c, e->as.call.args[1]);
+                TaOperand a[2] = {a0, a1};
+                return emit_rt(c, "ta_rt_str_count", a, 2, ta_ty_int());
+            }
+            case TA_BI_ASSERT: {
+                TaOperand a0 = gen_expr(c, e->as.call.args[0]);
+                TaOperand a1 = gen_expr(c, e->as.call.args[1]);
+                TaOperand a[2] = {a0, a1};
+                emit_rt(c, "ta_rt_assert", a, 2, ta_ty_void());
+                return (TaOperand){TA_OP_NONE, 0, 0, 0, 0};
+            }
             default:
                 return (TaOperand){TA_OP_NONE, 0, 0, 0, 0};
         }

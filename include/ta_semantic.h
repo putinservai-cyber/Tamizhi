@@ -34,7 +34,14 @@ typedef enum {
     TA_BI_STR_UPPER,
     TA_BI_STR_LOWER,
     TA_BI_STR_STARTSWITH,
-    TA_BI_STR_ENDSWITH
+    TA_BI_STR_ENDSWITH,
+    TA_BI_LIST_PUSH,
+    TA_BI_LIST_POP,
+    TA_BI_DICT_KEYS,
+    TA_BI_DICT_ITEMS,
+    TA_BI_STR_FIND,
+    TA_BI_STR_COUNT,
+    TA_BI_ASSERT
 } TaBuiltinId;
 
 typedef struct TaScope TaScope;
@@ -47,6 +54,7 @@ typedef struct TaSymbol {
     int line;
     int col;
     bool is_const;
+    bool used;
     TaBuiltinId builtin_id;
     TaScope *members;
     struct {

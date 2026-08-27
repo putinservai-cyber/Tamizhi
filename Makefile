@@ -16,7 +16,7 @@ UNIT_BINS  := $(patsubst tests/unit/%.c,$(BUILD)/tests/%,$(UNIT_SRCS))
 
 PREFIX ?= $(HOME)/.local
 
-.PHONY: all test clean install uninstall
+.PHONY: all test clean install uninstall asan test-asan ci
 
 $(BUILD)/tai: $(BIN)
 	@mkdir -p $(dir $@)
@@ -54,6 +54,18 @@ $(BUILD)/tests/%: tests/unit/%.c $(filter-out $(BUILD)/src/cli/main.o,$(COMPILER
 test: all $(UNIT_BINS)
 	@for t in $(UNIT_BINS); do ./$$t || exit 1; done
 	@bash tests/run_e2e.sh
+
+# Build the whole compiler + runtime under AddressSanitizer for memory checks.
+asan:
+	$(MAKE) clean
+	$(MAKE) CFLAGS="-O1 -g -fsanitize=address -fno-omit-frame-pointer -fno-sanitize-recover=address"
+
+# Build under ASAN and run the full test suite.
+test-asan: asan
+	$(MAKE) test
+
+# Thin CI entry point: exits non-zero on any failure.
+ci: test
 
 clean:
 	rm -rf $(BUILD)

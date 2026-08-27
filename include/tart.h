@@ -7,7 +7,8 @@
 #include <stddef.h>
 
 typedef struct {
-    int64_t len;
+    int64_t len;       /* byte length */
+    int64_t cp_len;    /* cached code-point count (-1 = not yet computed) */
     char data[];
 } TaRtStr;
 
@@ -31,10 +32,14 @@ void ta_rt_abort_key(void);
 TaRtList *ta_rt_list_new_n(int64_t n);
 void *ta_rt_list_get(TaRtList *l, int64_t i);
 void ta_rt_list_set(TaRtList *l, int64_t i, void *src);
+TaRtList *ta_rt_list_push(TaRtList *l, void *elem);
+TaRtList *ta_rt_list_pop(TaRtList *l);
 
 TaRtDict *ta_rt_dict_new(void);
 void *ta_rt_dict_get(TaRtDict *d, void *key, int64_t key_is_str);
 void ta_rt_dict_set(TaRtDict *d, void *key, void *val, int64_t key_is_str);
+TaRtList *ta_rt_dict_keys(TaRtDict *d);
+TaRtList *ta_rt_dict_items(TaRtDict *d);
 
 TaRtStr *ta_rt_str_new(int64_t len);
 TaRtStr *ta_rt_str_concat(TaRtStr *a, TaRtStr *b);
@@ -50,6 +55,9 @@ TaRtStr *ta_rt_str_upper(TaRtStr *s);
 TaRtStr *ta_rt_str_lower(TaRtStr *s);
 int64_t ta_rt_str_startswith(TaRtStr *s, TaRtStr *prefix);
 int64_t ta_rt_str_endswith(TaRtStr *s, TaRtStr *suffix);
+int64_t ta_rt_str_find(TaRtStr *s, TaRtStr *sub);
+int64_t ta_rt_str_count(TaRtStr *s, TaRtStr *sub);
+void ta_rt_assert(int64_t cond, TaRtStr *msg);
 
 TaRtStr *ta_rt_input(void);
 TaRtList *ta_rt_range_1(int64_t n);

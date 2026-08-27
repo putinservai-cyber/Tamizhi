@@ -122,6 +122,14 @@ static void register_builtins(TaScope *globals) {
     register_builtin_fn(globals, "துவங்கிறதா", TA_BI_STR_STARTSWITH);
     register_builtin_fn(globals, "முடிவதா", TA_BI_STR_ENDSWITH);
 
+    register_builtin_fn(globals, "சேர்", TA_BI_LIST_PUSH);
+    register_builtin_fn(globals, "நீக்கு", TA_BI_LIST_POP);
+    register_builtin_fn(globals, "விசைகள்", TA_BI_DICT_KEYS);
+    register_builtin_fn(globals, "உருப்படிகள்", TA_BI_DICT_ITEMS);
+    register_builtin_fn(globals, "கண்டுபிடி", TA_BI_STR_FIND);
+    register_builtin_fn(globals, "எண்ணிக்கை", TA_BI_STR_COUNT);
+    register_builtin_fn(globals, "உறுதிப்படுத்து", TA_BI_ASSERT);
+
     TaSymbol *mathmod = ta_symbol_new("கணிதம்", TA_SYM_MODULE, 0, 0);
     mathmod->members = ta_scope_new(globals);
     ta_scope_declare(globals, mathmod);
@@ -288,6 +296,20 @@ static void analyze_func(SemCtx *c, TaFuncDef *fd, TaSymbol *fsym) {
     c->next_slot = slot;
 
     analyze_block(c, fd->body);
+
+    /* Warn (non-fatal) about unused local variables / parameters. */
+    for (size_t b = 0; b < local->nbuckets; b++) {
+        struct TaScopeEntry *e = local->buckets[b];
+        for (; e; e = e->next) {
+            TaSymbol *s = e->sym;
+            if (!s->used && (s->kind == TA_SYM_VAR || s->kind == TA_SYM_PARAM)) {
+                fprintf(stderr,
+                        "%s:%d:%d: \u0b8e\u0b9a\u0bcd\u0b9a\u0bb0\u0bbf\u0b95\u0bcd\u0b95\u0bc8: "
+                        "\u0bae\u0bbe\u0bb1\u0bbf '%s' \u0baa\u0baf\u0ba9\u0bcd\u0baa\u0b9f\u0bc1\u0ba4\u0bcd\u0ba4\u0baa\u0bcd\u0baa\u0b9f\u0bb5\u0bbf\u0bb2\u0bcd\u0bb2\u0bc8\n",
+                        c->file, s->line, s->col, s->name);
+            }
+        }
+    }
 
     fsym->fn.nlocals = c->next_slot;
 
@@ -467,6 +489,7 @@ static void resolve_expr_ex(SemCtx *c, TaExpr *e, bool allow_module) {
             }
             e->sym = sym;
             e->ty = sym->type;
+            sym->used = true;
             break;
         }
         case TX_BINARY:

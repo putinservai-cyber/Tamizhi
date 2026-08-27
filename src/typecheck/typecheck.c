@@ -299,6 +299,107 @@ static const TaType *builtin_result_type(TcCtx *c, TaSymbol *sym, TaExpr **args,
                          "முடிவதா(): இரண்டாம் அளவுரு உரை ஆக இருக்க வேண்டும்", "");
             return ta_ty_bool();
         }
+        case TA_BI_LIST_PUSH: {
+            if (nargs != 2) {
+                tc_error(c, TA_ERR_TYPE + 3, line, col,
+                         "சேர்() க்கு 2 அளவுருக்கள் வேண்டும்",
+                         "எ.கா.: சேர்(பட்டியல், உறுப்பு)");
+                return ta_ty_list(ta_ty_unknown());
+            }
+            const TaType *t0 = check_expr(c, args[0]);
+            check_expr(c, args[1]);
+            if (t0->kind != TY_LIST && t0->kind != TY_UNKNOWN)
+                tc_error(c, TA_ERR_TYPE + 4, args[0]->line, args[0]->col,
+                         "சேர்(): முதல் அளவுரு பட்டியல் ஆக இருக்க வேண்டும்", "");
+            return ta_ty_list(ta_ty_unknown());
+        }
+        case TA_BI_LIST_POP: {
+            if (nargs != 1) {
+                tc_error(c, TA_ERR_TYPE + 3, line, col,
+                         "நீக்கு() க்கு 1 அளவுரு வேண்டும்", "எ.கா.: நீக்கு(பட்டியல்)");
+                return ta_ty_list(ta_ty_unknown());
+            }
+            const TaType *t0 = check_expr(c, args[0]);
+            if (t0->kind != TY_LIST && t0->kind != TY_UNKNOWN)
+                tc_error(c, TA_ERR_TYPE + 4, args[0]->line, args[0]->col,
+                         "நீக்கு(): அளவுரு பட்டியல் ஆக இருக்க வேண்டும்", "");
+            return ta_ty_list(ta_ty_unknown());
+        }
+        case TA_BI_DICT_KEYS: {
+            if (nargs != 1) {
+                tc_error(c, TA_ERR_TYPE + 3, line, col,
+                         "விசைகள்() க்கு 1 அளவுரு வேண்டும்", "எ.கா.: விசைகள்(அகராதி)");
+                return ta_ty_list(ta_ty_unknown());
+            }
+            const TaType *t0 = check_expr(c, args[0]);
+            if (t0->kind != TY_DICT && t0->kind != TY_UNKNOWN)
+                tc_error(c, TA_ERR_TYPE + 4, args[0]->line, args[0]->col,
+                         "விசைகள்(): அளவுரு அகராதி ஆக இருக்க வேண்டும்", "");
+            return ta_ty_list(ta_ty_unknown());
+        }
+        case TA_BI_DICT_ITEMS: {
+            if (nargs != 1) {
+                tc_error(c, TA_ERR_TYPE + 3, line, col,
+                         "உருப்படிகள்() க்கு 1 அளவுரு வேண்டும்", "எ.கா.: உருப்படிகள்(அகராதி)");
+                return ta_ty_list(ta_ty_list(ta_ty_unknown()));
+            }
+            const TaType *t0 = check_expr(c, args[0]);
+            if (t0->kind != TY_DICT && t0->kind != TY_UNKNOWN)
+                tc_error(c, TA_ERR_TYPE + 4, args[0]->line, args[0]->col,
+                         "உருப்படிகள்(): அளவுரு அகராதி ஆக இருக்க வேண்டும்", "");
+            return ta_ty_list(ta_ty_list(ta_ty_unknown()));
+        }
+        case TA_BI_STR_FIND: {
+            if (nargs != 2) {
+                tc_error(c, TA_ERR_TYPE + 3, line, col,
+                         "கண்டுபிடி() க்கு 2 அளவுருக்கள் வேண்டும்",
+                         "எ.கா.: கண்டுபிடி(உரை, துண்டு)");
+                return ta_ty_int();
+            }
+            const TaType *t0 = check_expr(c, args[0]);
+            const TaType *t1 = check_expr(c, args[1]);
+            if (t0->kind != TY_STRING)
+                tc_error(c, TA_ERR_TYPE + 4, args[0]->line, args[0]->col,
+                         "கண்டுபிடி(): முதல் அளவுரு உரை ஆக இருக்க வேண்டும்", "");
+            if (t1->kind != TY_STRING)
+                tc_error(c, TA_ERR_TYPE + 4, args[1]->line, args[1]->col,
+                         "கண்டுபிடி(): இரண்டாம் அளவுரு உரை ஆக இருக்க வேண்டும்", "");
+            return ta_ty_int();
+        }
+        case TA_BI_STR_COUNT: {
+            if (nargs != 2) {
+                tc_error(c, TA_ERR_TYPE + 3, line, col,
+                         "எண்ணிக்கை() க்கு 2 அளவுருக்கள் வேண்டும்",
+                         "எ.கா.: எண்ணிக்கை(உரை, துண்டு)");
+                return ta_ty_int();
+            }
+            const TaType *t0 = check_expr(c, args[0]);
+            const TaType *t1 = check_expr(c, args[1]);
+            if (t0->kind != TY_STRING)
+                tc_error(c, TA_ERR_TYPE + 4, args[0]->line, args[0]->col,
+                         "எண்ணிக்கை(): முதல் அளவுரு உரை ஆக இருக்க வேண்டும்", "");
+            if (t1->kind != TY_STRING)
+                tc_error(c, TA_ERR_TYPE + 4, args[1]->line, args[1]->col,
+                         "எண்ணிக்கை(): இரண்டாம் அளவுரு உரை ஆக இருக்க வேண்டும்", "");
+            return ta_ty_int();
+        }
+        case TA_BI_ASSERT: {
+            if (nargs != 2) {
+                tc_error(c, TA_ERR_TYPE + 3, line, col,
+                         "உறுதிப்படுத்து() க்கு 2 அளவுருக்கள் வேண்டும்",
+                         "எ.கா.: உறுதிப்படுத்து(நிபந்தனை, செய்தி)");
+                return ta_ty_void();
+            }
+            const TaType *t0 = check_expr(c, args[0]);
+            const TaType *t1 = check_expr(c, args[1]);
+            if (t0->kind != TY_BOOL && t0->kind != TY_UNKNOWN)
+                tc_error(c, TA_ERR_TYPE + 4, args[0]->line, args[0]->col,
+                         "உறுதிப்படுத்து(): முதல் அளவுரு பூலியன் ஆக இருக்க வேண்டும்", "");
+            if (t1->kind != TY_STRING)
+                tc_error(c, TA_ERR_TYPE + 4, args[1]->line, args[1]->col,
+                         "உறுதிப்படுத்து(): இரண்டாம் அளவுரு உரை ஆக இருக்க வேண்டும்", "");
+            return ta_ty_void();
+        }
         default:
             break;
     }
@@ -725,6 +826,11 @@ static void check_stmt(TcCtx *c, TaStmt *st) {
             }
             if (!it) break;
             if (it->kind == TY_UNKNOWN || contains_unknown(it)) {
+                TaExpr *init = st->as.vardecl.init;
+                if (init && init->kind == TX_CALL) {
+                    if (vsym) vsym->type = it;
+                    break;
+                }
                 tc_error(c, TA_ERR_TYPE + 9, st->line, st->col,
                          "வெற்று தொகுப்பின் வகையை ஊகிக்க முடியவில்லை",
                          "வகைக் குறிப்பு சேர்க்கவும்; எ.கா.: மாறி x: [முழுஎண்] = []");
@@ -749,11 +855,21 @@ static void check_stmt(TcCtx *c, TaStmt *st) {
                 TaSymbol *sym = tgt->sym;
                 if (sym && !sym->type) {
                     const TaType *vt0 = check_expr(c, st->as.assign.value);
-                    if (vt0->kind == TY_VOID || contains_unknown(vt0)) {
+                    if (vt0->kind == TY_VOID) {
                         tc_error(c, TA_ERR_TYPE + 9, st->line, st->col,
                                  "மதிப்பை ஊகிக்க முடியவில்லை",
                                  "வகைக் குறிப்புடன் அறிவிக்கவும்");
                         sym->type = ta_ty_error();
+                    } else if (contains_unknown(vt0)) {
+                        TaExpr *val = st->as.assign.value;
+                        if (val && val->kind == TX_CALL) {
+                            sym->type = vt0;
+                        } else {
+                            tc_error(c, TA_ERR_TYPE + 9, st->line, st->col,
+                                     "மதிப்பை ஊகிக்க முடியவில்லை",
+                                     "வகைக் குறிப்புடன் அறிவிக்கவும்");
+                            sym->type = ta_ty_error();
+                        }
                     } else {
                         sym->type = vt0;
                     }
