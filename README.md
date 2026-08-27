@@ -40,14 +40,28 @@ chmod +x hello.த && ./hello.த
 (Unix kernels reject spaces in `#!` interpreter paths; keep your tree out of
 directories like `New Folder` for direct execution, or use `tai file.த`.)
 
+### Cross-platform: emit C instead of x86-64
+
+In addition to the native x86-64 backend, Tamizhi can emit portable **C11**
+(`--target=c`). The generated C compiles with any C compiler against the bundled
+runtime (`src/runtime/tart.c`) — useful for porting to non-x86-64 platforms or
+for inspecting a lowered program:
+
+```bash
+./build/ta build --target=c hello.ta -o hello.c   # produces hello.c + compiles to ./hello
+./build/ta run   --target=c hello.த                # run via the C backend
+```
+
 ## Commands
 
 ```
-ta build <file.ta> [-o out]   compile to a native executable (+ .s assembly)
-ta run   <file.ta>            compile to a temp dir and execute
+ta build <file.ta> [-o out] [--target=c]   compile to a native executable (+ .s assembly)
+ta run   <file.ta> [--target=c]            compile to a temp dir and execute
 ta check <file.ta>            lex/parse/semantic/type-check only
 ta repl                       interactive session (:help inside)
 ta fmt   <file.ta>            print canonically formatted source
+ta check-fonts                list installed Tamil-capable fonts
+ta install-fonts              install a Tamil font (auto-detects package manager)
 ta doctor                      சூழல் பரிசோதனை
 ta version / ta help
 ```
@@ -81,13 +95,15 @@ src/
   semantic/ scopes & symbols
   typecheck inference & checking
   ir/       Tamizhi IR (TIR)
-  codegen/  x86-64 Intel-syntax emission
+  codegen/  x86-64 Intel-syntax emission (codegen.c) and portable C11 (cgen.c)
   runtime/  tart.c — linked into every program
   cli/      driver commands
 tests/      per-stage unit tests + e2e harness (make test)
-docs/       language.md grammar.md types.md compiler.md memory.md
+docs/       language.md grammar.md types.md compiler.md
             standard-library.md errors.md roadmap.md troubleshooting.md
+            keywords.md fonts.md
 examples/   hello.ta fibonacci.ta collections.ta
+tools/      install-tamil-fonts.sh (used by `ta install-fonts`)
 ```
 
 ## Terminal display
@@ -95,16 +111,24 @@ examples/   hello.ta fibonacci.ta collections.ta
 Tamil output needs a UTF-8 locale and a font with Tamil glyphs:
 
 ```bash
+ta check-fonts       # list installed Tamil-capable fonts
+ta install-fonts     # install one (auto-detects apt/dnf/yum/pacman/apk/brew)
 ta doctor            # diagnoses your terminal + fonts
 ta setup-konsole     # one-shot fix inside KDE Konsole
 ```
 
-See `docs/troubleshooting.md`.
+On Windows, the runtime switches the console to UTF-8 automatically, so Tamil
+text renders correctly in Windows Terminal once a Tamil font is installed.
+See `docs/fonts.md` and `docs/troubleshooting.md`.
 
 ## Status
 
 v0.1.1 — bootstrap milestone reached: the spec's MVP (`mvp.ta` prints `30`)
 and the success-criteria program both compile to native binaries.
-Self-hosting plan: docs/roadmap.md.
 
-Requirements: Linux x86-64, `cc` or `gcc`, GNU make.
+v0.2 (in progress) — portable **C11 backend** (`--target=c`) for cross-platform
+output, Tamil font tooling (`ta check-fonts` / `ta install-fonts`), and Windows
+UTF-8 console support. See `docs/roadmap.md`.
+
+Requirements: Linux/macOS x86-64 (native backend) or any platform with a C
+compiler (C backend); `cc`/`gcc`, GNU make.
