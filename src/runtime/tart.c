@@ -12,8 +12,12 @@
 #include <string.h>
 #include <ctype.h>
 
-#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+#if !defined(_WIN32)
 #include <pthread.h>
+#endif
+
+#if defined(__SANITIZE_ADDRESS__)
+#include <sanitizer/asan_interface.h>
 #endif
 
 #if defined(_WIN32)
@@ -86,6 +90,33 @@ static void gc_init_stack_bounds(void) {
     static atomic_int gc_init_done = 0;
     if (atomic_exchange(&gc_init_done, 1)) return;
 
+#if defined(__APPLE__)
+    void *base = pthread_get_stackaddr_np(pthread_self());
+    size_t size = pthread_get_stacksize_np(pthread_self());
+    /* pthread reports the *lowest* address; the top is base + size. */
+    gc_stack_bottom = (void *)((uintptr_t)base + size);
+    return;
+#endif
+
+    /* Prefer the thread-attribute API: it returns the bounds of the *current*
+       thread's stack, which is correct even when /proc/self/maps reports a
+       stale or secondary "[stack]" region (this happens under AddressSanitizer,
+       where the mapped [stack] does not match the thread actually executing).
+       Falls back to /proc/self/maps on Linux, then to a conservative bound. */
+#if defined(__linux__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+    pthread_attr_t a;
+    if (pthread_getattr_np(pthread_self(), &a) == 0) {
+        void *base = NULL;
+        size_t size = 0;
+        if (pthread_attr_getstack(&a, &base, &size) == 0 && size) {
+            gc_stack_bottom = (void *)((uintptr_t)base + size);
+            pthread_attr_destroy(&a);
+            return;
+        }
+        pthread_attr_destroy(&a);
+    }
+#endif
+
 #if defined(__linux__)
     FILE *m = fopen("/proc/self/maps", "r");
     if (m) {
@@ -94,7 +125,7 @@ static void gc_init_stack_bounds(void) {
             unsigned long long start = 0, end = 0;
             char path[256] = {0};
             if (sscanf(line, "%llx-%llx %*s %*s %*s %*s %255[^\n]",
-                       &start, &end, path) == 3) {
+                        &start, &end, path) == 3) {
                 if (strstr(path, "[stack]")) {
                     gc_stack_bottom = (void *)(uintptr_t)end;
                     break;
@@ -104,14 +135,6 @@ static void gc_init_stack_bounds(void) {
         fclose(m);
         return;
     }
-#endif
-
-#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
-    void *base = pthread_get_stackaddr_np(pthread_self());
-    size_t size = pthread_get_stacksize_np(pthread_self());
-    /* pthread reports the *lowest* address; the top is base + size. */
-    gc_stack_bottom = (void *)((uintptr_t)base + size);
-    return;
 #endif
 
     /* Unknown platform: fall back to a conservative bound that covers the
@@ -222,6 +245,20 @@ static void gc_scan_pointer(void *cand) {
     gc_wl_push(h);
 }
 
+#if defined(__SANITIZE_ADDRESS__)
+#  if defined(__clang__)
+#    define TA_NO_ASAN __attribute__((no_sanitize("address")))
+#  else
+#    define TA_NO_ASAN __attribute__((no_sanitize_address))
+#  endif
+#else
+#  define TA_NO_ASAN
+#endif
+
+/* Conservative stack/register scans read raw memory that AddressSanitizer
+   deliberately poisons (stack redzones). Disable ASan instrumentation here so
+   the deliberate conservative scan is not reported as an out-of-bounds access.
+   The scan bounds are validated by the caller (gc_collect_inner). */
 static void gc_scan_range(const char *lo, const char *hi) {
     for (const char *p = lo; p + sizeof(void *) <= hi; p += sizeof(void *)) {
         void *cand;
@@ -270,14 +307,20 @@ static void gc_collect_inner(const char *why) {
        window must be 8-byte aligned or a slot straddles two windows and is
        never seen as a whole pointer (silently missing live roots). */
     lo = (const char *)((uintptr_t)lo & ~(uintptr_t)7);
-    hi = (const char *)(((uintptr_t)hi + 7) & ~(uintptr_t)7);
+    hi = (const char *)(((uintptr_t)hi) & ~(uintptr_t)7);
     /* Build the O(1) lookup table once, then reset the mark worklist. */
     gc_table_build();
     gc_wl = NULL; gc_wl_len = 0; gc_wl_cap = 0;
 
     /* Scan roots: stack frames + callee-saved registers. */
+#if defined(__SANITIZE_ADDRESS__)
+    __asan_unpoison_memory_region(lo, (size_t)((char *)hi - (char *)lo));
+#endif
     gc_scan_range(lo, hi);
     gc_scan_range((const char *)regs, (const char *)regs + sizeof(jmp_buf));
+#if defined(__SANITIZE_ADDRESS__)
+    __asan_poison_memory_region(lo, (size_t)((char *)hi - (char *)lo));
+#endif
 
     /* Drain the worklist: every marked object is traced exactly once.
        This replaces the old O(objects^2) fixpoint re-scan with O(live

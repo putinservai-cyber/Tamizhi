@@ -553,7 +553,7 @@ static int cmd_setup_konsole(void) {
         "Noto Sans Tamil", "Noto Sans Tamil UI",
         "Lohit Tamil",     "Droid Sans Tamil", NULL
     };
-    char best[128] = "";
+    char best[256] = "";
     FILE *fc = popen("fc-list :lang=ta family 2>/dev/null", "r");
     if (fc) {
         char lb[256];
@@ -807,7 +807,7 @@ static int cmd_doctor(void) {
     }
 
     /* Tamil fonts */
-    char fonts[5][64];
+    char fonts[5][128];
     int nfonts = 0;
     FILE *f = popen("fc-list :lang=ta family 2>/dev/null | sort -u", "r");
     if (f) {

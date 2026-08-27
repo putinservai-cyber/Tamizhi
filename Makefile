@@ -60,9 +60,11 @@ asan:
 	$(MAKE) clean
 	$(MAKE) CFLAGS="-O1 -g -fsanitize=address -fno-omit-frame-pointer -fno-sanitize-recover=address"
 
-# Build under ASAN and run the full test suite.
-test-asan: asan
-	$(MAKE) test
+# Build under ASAN and run the full test suite in a single CFLAGS context
+# (a separate `make test` would relink unit tests without the sanitizer libs).
+test-asan:
+	$(MAKE) clean
+	$(MAKE) CFLAGS="-O1 -g -fsanitize=address -fno-omit-frame-pointer -fno-sanitize-recover=address" test
 
 # Thin CI entry point: exits non-zero on any failure.
 ci: test
