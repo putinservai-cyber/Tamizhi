@@ -16,6 +16,24 @@
 #include <pthread.h>
 #endif
 
+#if defined(_WIN32)
+#include <windows.h>
+#include <io.h>
+#include <fcntl.h>
+#endif
+
+void ta_rt_init(void) {
+#if defined(_WIN32)
+    /* Switch the console to UTF-8 so Tamil text renders correctly. */
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+    _setmode(_fileno(stdout), _O_U8TEXT);
+    _setmode(_fileno(stderr), _O_U8TEXT);
+    _setmode(_fileno(stdin), _O_U8TEXT);
+#endif
+    (void)0;
+}
+
 static void rt_fail(const char *msg) {
     fprintf(stderr, "\u0b87\u0baf\u0b95\u0bcd\u0b95 \u0ba8\u0bc7\u0bb0\u0bcd \u0baa\u0bbf\u0bb4\u0bc8: %s\n", msg);
     exit(70);
@@ -523,6 +541,14 @@ TaRtStr *ta_rt_str_new(int64_t len) {
     s->len = len;
     s->data[len] = 0;
     s->cp_len = -1;   /* computed lazily by ta_rt_str_at / ta_rt_str_sub */
+    return s;
+}
+
+/* Build a TaRtStr by copying `len` bytes from `data`. Used by the C backend. */
+TaRtStr *ta_rt_str_from(const char *data, int64_t len) {
+    if (len < 0) len = 0;
+    TaRtStr *s = ta_rt_str_new(len);
+    if (data && len > 0) memcpy(s->data, data, (size_t)len);
     return s;
 }
 

@@ -595,6 +595,7 @@ bool ta_codegen_emit(TaIrUnit *unit, TaStrBuf *out_asm) {
     ta_sb_puts(out_asm, "main:\n");
     ta_sb_puts(out_asm, "    push rbp\n");
     ta_sb_puts(out_asm, "    mov rbp, rsp\n");
+    ta_sb_puts(out_asm, "    call ta_rt_init\n");
     ta_sb_puts(out_asm, "    call ta_top\n");
     if (unit->main_sym) {
         char target[64];

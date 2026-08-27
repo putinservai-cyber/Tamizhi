@@ -29,6 +29,11 @@ void ta_rt_abort_div_zero(void);
 void ta_rt_abort_index(int64_t idx, int64_t len);
 void ta_rt_abort_key(void);
 
+/* One-time runtime/locale/console initialization. Must run before any
+   output or input, especially on Windows where the console must be switched
+   to UTF-8. Safe to call on every platform (no-op where not needed). */
+void ta_rt_init(void);
+
 TaRtList *ta_rt_list_new_n(int64_t n);
 void *ta_rt_list_get(TaRtList *l, int64_t i);
 void ta_rt_list_set(TaRtList *l, int64_t i, void *src);
@@ -42,6 +47,7 @@ TaRtList *ta_rt_dict_keys(TaRtDict *d);
 TaRtList *ta_rt_dict_items(TaRtDict *d);
 
 TaRtStr *ta_rt_str_new(int64_t len);
+TaRtStr *ta_rt_str_from(const char *data, int64_t len);
 TaRtStr *ta_rt_str_concat(TaRtStr *a, TaRtStr *b);
 int64_t ta_rt_str_eq(TaRtStr *a, TaRtStr *b);
 int64_t ta_rt_str_cmp(TaRtStr *a, TaRtStr *b);

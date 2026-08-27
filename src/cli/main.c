@@ -22,7 +22,7 @@ typedef struct {
 } BuildOutput;
 
 static int run_pipeline(const char *path, const char *src, TaStrBuf *asm_out,
-                        bool *incomplete, bool echo_top_exprs) {
+                        bool *incomplete, bool echo_top_exprs, bool emit_c) {
     TaDiagnostics *diag = ta_diag_new();
     TaLexResult lr;
     memset(&lr, 0, sizeof(lr));
@@ -46,7 +46,10 @@ static int run_pipeline(const char *path, const char *src, TaStrBuf *asm_out,
                         ta_ir_generate(path, &prog, globals, top_slots, diag,
                                        echo_top_exprs);
                     if (unit) {
-                        ta_codegen_emit(unit, asm_out);
+                        if (emit_c)
+                            ta_ir_emit_c(unit, asm_out);
+                        else
+                            ta_codegen_emit(unit, asm_out);
                         ta_ir_unit_free(unit);
                     }
                 }
@@ -108,6 +111,66 @@ static char *find_runtime_obj(const char *argv0) {
     return r;
 }
 
+static char *find_runtime_c(const char *argv0) {
+    char *a = find_file_relative(argv0, "tart.c");
+    char *b = find_file_relative(argv0, "../lib/tamizhi/tart.c");
+    char *c = find_file_relative(argv0, "../src/runtime/tart.c");
+    const char *env = getenv("TA_RT_C");
+    const char *cands[5];
+    size_t n = 0;
+    if (env) cands[n++] = env;
+    cands[n++] = a;
+    cands[n++] = b;
+    cands[n++] = c;
+    cands[n++] = "src/runtime/tart.c";
+    char *r = first_existing(cands, n);
+    free(a);
+    free(b);
+    free(c);
+    return r;
+}
+
+/* Locate the runtime include directory (tart.h). */
+static char *find_include_dir(const char *argv0) {
+    char *a = find_file_relative(argv0, "../include");
+    char *b = find_file_relative(argv0, "../../include");
+    const char *env = getenv("TA_INCLUDE");
+    const char *cands[5];
+    size_t n = 0;
+    if (env) cands[n++] = env;
+    cands[n++] = a;
+    cands[n++] = b;
+    cands[n++] = "include";
+    char *r = first_existing(cands, n);
+    free(a);
+    free(b);
+    return r;
+}
+
+/* Compile generated C together with the portable runtime C source. */
+static int compile_c(const char *c_path, const char *rt_c_path,
+                    const char *exe_path, const char *inc_dir, char **err_hint) {
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+    if (pid == 0) {
+        const char *idir = inc_dir ? inc_dir : "include";
+        execlp("cc", "cc", "-I", idir, c_path, rt_c_path, "-lm", "-o",
+               exe_path, (char *)NULL);
+        execlp("gcc", "gcc", "-I", idir, c_path, rt_c_path, "-lm", "-o",
+               exe_path, (char *)NULL);
+        _exit(127);
+    }
+    int st = 0;
+    waitpid(pid, &st, 0);
+    if (WIFEXITED(st)) {
+        if (WEXITSTATUS(st) == 0) return 0;
+        if (WEXITSTATUS(st) == 127 && err_hint)
+            *err_hint = ta_xstrdup("'cc' கிடைக்கவில்லை; C toolchain நிறுவப்பட்டுள்ளதா?");
+        return WEXITSTATUS(st);
+    }
+    return -1;
+}
+
 static int link_exe(const char *asm_path, const char *obj_path, const char *exe_path,
                     char **err_hint) {
     pid_t pid = fork();
@@ -146,8 +209,27 @@ static char *default_output_name(const char *src_path) {
     return out;
 }
 
-static int cmd_build(const char *argv0, const char *src_path, const char *out_exe,
-                     bool show_banner) {
+static void usage(FILE *out, const char *prog);
+
+static int cmd_build_to(int argc, char **argv, const char *out_exe,
+                        bool show_banner) {
+    const char *argv0 = argv[0];
+    const char *src_path = NULL;
+    bool c_target = false;
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--target") == 0 && i + 1 < argc) {
+            c_target = (strcmp(argv[++i], "c") == 0);
+        } else if (strncmp(argv[i], "--target=", 9) == 0) {
+            c_target = (strcmp(argv[i] + 9, "c") == 0);
+        } else if (!src_path) {
+            src_path = argv[i];
+        }
+    }
+    if (!src_path) {
+        usage(stderr, argv0);
+        return 2;
+    }
+
     int errc = 0;
     size_t len = 0;
     char *src = ta_read_file(src_path, &len, &errc);
@@ -155,24 +237,60 @@ static int cmd_build(const char *argv0, const char *src_path, const char *out_ex
         fprintf(stderr, "பிழை TA6001: கோப்பைப் படிக்க முடியவில்லை: %s\n", src_path);
         return 2;
     }
-    TaStrBuf asm_sb;
-    ta_sb_init(&asm_sb);
-    int rc = run_pipeline(src_path, src, &asm_sb, NULL, false);
+    TaStrBuf sb;
+    ta_sb_init(&sb);
+    int rc = run_pipeline(src_path, src, &sb, NULL, false, c_target);
     free(src);
     if (rc != 0) {
-        ta_sb_free(&asm_sb);
+        ta_sb_free(&sb);
         return rc;
     }
+
+    if (c_target) {
+        size_t need = strlen(out_exe) + 3;
+        char *cpath = ta_xmalloc(need);
+        snprintf(cpath, need, "%s.c", out_exe);
+        if (!ta_write_file(cpath, sb.data, sb.len)) {
+            fprintf(stderr, "பிழை TA6002: C மூலம் எழுத முடியவில்லை: %s\n", cpath);
+            ta_sb_free(&sb);
+            free(cpath);
+            return 1;
+        }
+        ta_sb_free(&sb);
+        char *rtc = find_runtime_c(argv0);
+        if (!rtc) {
+            fprintf(stderr,
+                    "பிழை TA6004: runtime C (tart.c) கிடைக்கவில்லை; "
+                    "TA_RT_C env-இல் பாதையைக் கொடுங்கள்\n");
+            free(cpath);
+            return 1;
+        }
+        char *inc = find_include_dir(argv0);
+        char *hint = NULL;
+        int crc = compile_c(cpath, rtc, out_exe, inc, &hint);
+        if (crc != 0) {
+            fprintf(stderr, "பிழை TA6003: C உருவாக்க இயலவில்லை (%s)\n",
+                    hint ? hint : "'cc' இல்லை");
+        } else if (show_banner) {
+            printf("✓ %s (C இலக்கு / C target)\n", out_exe);
+        }
+        free(hint);
+        free(inc);
+        free(rtc);
+        free(cpath);
+        return crc == 0 ? 0 : 1;
+    }
+
     size_t need = strlen(out_exe) + 4;
     char *asm_path = ta_xmalloc(need);
     snprintf(asm_path, need, "%s.s", out_exe);
-    if (!ta_write_file(asm_path, asm_sb.data, asm_sb.len)) {
+    if (!ta_write_file(asm_path, sb.data, sb.len)) {
         fprintf(stderr, "பிழை TA6002: assembly எழுத முடியவில்லை: %s\n", asm_path);
-        ta_sb_free(&asm_sb);
+        ta_sb_free(&sb);
         free(asm_path);
         return 1;
     }
-    ta_sb_free(&asm_sb);
+    ta_sb_free(&sb);
 
     char *obj = find_runtime_obj(argv0);
     if (!obj) {
@@ -185,7 +303,8 @@ static int cmd_build(const char *argv0, const char *src_path, const char *out_ex
     char *hint = NULL;
     int lrc = link_exe(asm_path, obj, out_exe, &hint);
     if (lrc != 0) {
-        fprintf(stderr, "பிழை TA6003: link செய்ய முடியவில்லை (%s)\n", hint ? hint : "'cc' இல்லை");
+        fprintf(stderr, "பிழை TA6003: link செய்ய முடியவில்லை (%s)\n",
+                hint ? hint : "'cc' இல்லை");
         unlink(asm_path);
     } else if (show_banner) {
         printf("✓ %s (அதன் கூற்று: %s)\n", out_exe, asm_path);
@@ -196,9 +315,34 @@ static int cmd_build(const char *argv0, const char *src_path, const char *out_ex
     return lrc == 0 ? 0 : 1;
 }
 
+static int cmd_build(int argc, char **argv) {
+    const char *argv0 = argv[0];
+    const char *out = NULL;
+    const char *src_path = NULL;
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "-o") == 0 || strcmp(argv[i], "--output") == 0) {
+            if (i + 1 < argc) out = argv[++i];
+        } else if (strncmp(argv[i], "--target", 8) == 0) {
+            if (argv[i][8] == '=') { /* --target=c */ }
+            else if (i + 1 < argc) i++;
+        } else if (!src_path) {
+            src_path = argv[i];
+        }
+    }
+    char *def = NULL;
+    if (!out) {
+        def = default_output_name(src_path ? src_path : "a.ta");
+        out = def;
+    }
+    int rc = cmd_build_to(argc, argv, out, true);
+    free(def);
+    (void)argv0;
+    return rc;
+}
+
 static void print_runtime_error_note(void) {}
 
-static int cmd_run(const char *argv0, const char *src_path) {
+static int cmd_run(int argc, char **argv) {
     char tmpl[] = "/tmp/tamizhi-run-XXXXXX";
     char *dir = mkdtemp(tmpl);
     if (!dir) {
@@ -207,7 +351,7 @@ static int cmd_run(const char *argv0, const char *src_path) {
     }
     char exe[512];
     snprintf(exe, sizeof(exe), "%s/program", dir);
-    int rc = cmd_build(argv0, src_path, exe, false);
+    int rc = cmd_build_to(argc, argv, exe, false);
     if (rc == 0) {
         fflush(stdout);
         pid_t pid = fork();
@@ -224,8 +368,11 @@ static int cmd_run(const char *argv0, const char *src_path) {
     }
     char asmpath[600];
     snprintf(asmpath, sizeof(asmpath), "%s.s", exe);
+    char cpath[600];
+    snprintf(cpath, sizeof(cpath), "%s.c", exe);
     unlink(exe);
     unlink(asmpath);
+    unlink(cpath);
     rmdir(dir);
     return rc;
 }
@@ -239,7 +386,7 @@ static int cmd_check(const char *src_path) {
     }
     TaStrBuf asm_sb;
     ta_sb_init(&asm_sb);
-    int rc = run_pipeline(src_path, src, &asm_sb, NULL, false);
+    int rc = run_pipeline(src_path, src, &asm_sb, NULL, false, false);
     ta_sb_free(&asm_sb);
     free(src);
     if (rc == 0) printf("✓ %s — பிழைகள் இல்லை (no errors)\n", src_path);
@@ -319,7 +466,7 @@ static int cmd_repl(const char *argv0) {
         TaStrBuf asm_sb;
         ta_sb_init(&asm_sb);
         char *snapshot = ta_xstrdup(buf.data);
-        int rc = run_pipeline("<repl>", snapshot, &asm_sb, &incomplete, true);
+        int rc = run_pipeline("<repl>", snapshot, &asm_sb, &incomplete, true, false);
         if (rc != 0 && incomplete) {
             free(snapshot);
             ta_sb_free(&asm_sb);
@@ -528,6 +675,97 @@ static int cmd_setup_konsole(void) {
 }
 
 /* ------------------------------------------------------------------ */
+/* check-fonts: report available Tamil fonts                           */
+/* ------------------------------------------------------------------ */
+static int cmd_check_fonts(void) {
+    printf("தமிழ் எழுத்துருக்கள் பரிசோதனை\n");
+    printf("══════════════════════════════════\n");
+
+    /* Recommended families we look for (substring match, case-insensitive). */
+    const char *want[] = {
+        "noto", "lohit", "tamil", "catamaran", "bamini", "suruma", "dv", "freefont"
+    };
+    size_t nwant = sizeof(want) / sizeof(want[0]);
+
+    FILE *f = popen("fc-list :lang=ta family 2>/dev/null | sort -u", "r");
+    char line[256];
+    int total = 0;
+    bool have_want[nwant];
+    for (size_t i = 0; i < nwant; i++) have_want[i] = false;
+
+    if (!f) {
+        fprintf(stderr, "fc-list இயக்க முடியவில்லை (fontconfig நிறுவப்பட்டிருக்க வேண்டும்)\n");
+        return 1;
+    }
+    while (fgets(line, sizeof(line), f)) {
+        size_t l = strlen(line);
+        while (l && (line[l - 1] == '\n' || line[l - 1] == '\r')) line[--l] = 0;
+        if (!l) continue;
+        if (strchr(line, ',')) continue; /* skip multi-family entries */
+        total++;
+        if (total <= 20)
+            printf("  • %s\n", line);
+        char low[256];
+        size_t k = 0;
+        for (k = 0; k < l && k < sizeof(low) - 1; k++)
+            low[k] = (line[k] >= 'A' && line[k] <= 'Z') ? line[k] + 32 : line[k];
+        low[k] = 0;
+        for (size_t i = 0; i < nwant; i++)
+            if (strstr(low, want[i])) have_want[i] = true;
+    }
+    pclose(f);
+
+    printf("\nமொத்தம்: %d தமிழ் எழுத்துருக்கள் கிடைத்தன.\n", total);
+    if (total == 0) {
+        printf("✗ எந்த தமிழ் எழுத்துருவும் இல்லை.\n");
+        printf("  -> ta install-fonts  (அல்லது கைமுறையாக நிறுவவும்)\n");
+        return 1;
+    }
+
+    printf("பரிந்துரைக்கப்பட்ட குடும்பங்கள்:\n");
+    for (size_t i = 0; i < nwant; i++)
+        printf("  %s %s\n", have_want[i] ? "✓" : "·", want[i]);
+    printf("\nமுடிவு: %s\n", total ? "✓ எழுத்துருக்கள் தயார்" : "✗ எழுத்துரு தேவை");
+    return 0;
+}
+
+/* Locate a bundled helper script (tools/<name>) relative to the exe. */
+static char *find_helper(const char *name) {
+    static char path[2048];
+    char exe[1024];
+    ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+    if (n > 0) {
+        exe[n] = 0;
+        char *slash = strrchr(exe, '/');
+        if (slash) {
+            *slash = 0;
+            snprintf(path, sizeof(path), "%s/../tools/%s", exe, name);
+            if (access(path, X_OK) == 0) return path;
+            snprintf(path, sizeof(path), "%s/../%s", exe, name);
+            if (access(path, X_OK) == 0) return path;
+        }
+    }
+    const char *env = getenv("TA_TOOLS");
+    if (env) {
+        snprintf(path, sizeof(path), "%s/%s", env, name);
+        if (access(path, X_OK) == 0) return path;
+    }
+    snprintf(path, sizeof(path), "tools/%s", name);
+    return path;
+}
+
+/* install-fonts: run the bundled Tamil font installer                  */
+static int cmd_install_fonts(void) {
+    const char *script = find_helper("install-tamil-fonts.sh");
+    printf("நிறுவி உருவாக்கம்: %s\n", script);
+    char cmd[2176];
+    snprintf(cmd, sizeof(cmd), "\"%s\"", script);
+    int rc = system(cmd);
+    if (rc != 0)
+        fprintf(stderr, "எழுத்துரு நிறுவல் தோல்வி (நிலை %d). நிர்வாகி உரிமை தேவையாக இருக்கலாம்.\n", rc);
+    return rc ? 1 : 0;
+}
+
 /* doctor: environment check                                           */
 /* ------------------------------------------------------------------ */
 static int cmd_doctor(void) {
@@ -652,6 +890,8 @@ static void usage(FILE *out, const char *prog) {
         "  repl                          இடைச்சேர்க்க உரையாடல்\n"
         "  fmt <file.ta>                 நிரலை வடிவமைத்துக் காட்டு\n"
         "  doctor                        எழுத்துரு/சூழல் பரிசோதனை\n"
+        "  check-fonts                   நிறுவப்பட்ட தமிழ் எழுத்துருக்கள் பட்டியல்\n"
+        "  install-fonts                 Tamil எழுத்துருக்களை நிறுவு\n"
         "  setup-konsole                 Konsole-இல் தமிழ் எழுத்துரு அமை\n"
         "  version                       பதிப்பு\n"
         "  help                          உதவி\n", out);
@@ -684,21 +924,7 @@ int main(int argc, char **argv) {
             usage(stderr, prog);
             return 2;
         }
-        const char *out = NULL;
-        for (int i = 3; i < argc; i++) {
-            if ((strcmp(argv[i], "-o") == 0 || strcmp(argv[i], "--output") == 0) &&
-                i + 1 < argc) {
-                out = argv[++i];
-            }
-        }
-        char *def = NULL;
-        if (!out) {
-            def = default_output_name(argv[2]);
-            out = def;
-        }
-        int rc = cmd_build(prog, argv[2], out, true);
-        free(def);
-        return rc;
+        return cmd_build(argc, argv);
     }
     if (strcmp(cmd, "run") == 0) {
         if (argc < 3) {
@@ -706,7 +932,7 @@ int main(int argc, char **argv) {
             return 2;
         }
         print_runtime_error_note();
-        return cmd_run(prog, argv[2]);
+        return cmd_run(argc, argv);
     }
     if (strcmp(cmd, "check") == 0) {
         if (argc < 3) {
@@ -723,6 +949,8 @@ int main(int argc, char **argv) {
         return cmd_fmt(argv[2]);
     }
     if (strcmp(cmd, "doctor") == 0) return cmd_doctor();
+    if (strcmp(cmd, "check-fonts") == 0) return cmd_check_fonts();
+    if (strcmp(cmd, "install-fonts") == 0) return cmd_install_fonts();
     if (strcmp(cmd, "setup-konsole") == 0) return cmd_setup_konsole();
     if (strcmp(cmd, "repl") == 0) return cmd_repl(prog);
 

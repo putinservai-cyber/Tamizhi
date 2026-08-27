@@ -84,6 +84,9 @@ TaIrUnit *ta_ir_generate(const char *file, TaProgram *prog, TaScope *globals,
                          int top_slots, TaDiagnostics *diag, bool echo_top_exprs);
 void ta_ir_unit_free(TaIrUnit *u);
 
+/* Emit portable C11 source (complements the x86-64 code generator). */
+void ta_ir_emit_c(const TaIrUnit *unit, TaStrBuf *out);
+
 int ta_ir_add_string(TaIrUnit *u, const char *data, size_t len);
 
 #endif
