@@ -268,6 +268,9 @@ static void gc_scan_range(const char *lo, const char *hi) {
 }
 
 static void gc_trace_object(TaGcHead *h) {
+    /* GC_MALLOC_ATOMIC equivalent: type 0 (raw) and 1 (string) contain no
+       heap pointers — skip scanning entirely. */
+    if (h->type == 0 || h->type == 1) return;
     void *u = (char *)h + TA_GC_HDR;
     if (h->type == 2) {
         TaRtList *l = (TaRtList *)u;
@@ -293,7 +296,15 @@ static void gc_trace_object(TaGcHead *h) {
 
 static void gc_collect_inner(const char *why) {
     jmp_buf regs;
-    setjmp(regs);
+    /* Force callee-saved registers onto the stack before setjmp.
+       __builtin_unwind_init is more reliable than setjmp alone on
+       some toolchains (ASan, LTO) where jmp_buf may not capture all. */
+#if defined(__GNUC__) || defined(__clang__)
+    __builtin_unwind_init();
+#endif
+    /* volatile prevents tail-call / DCE of setjmp */
+    volatile int _r = setjmp(regs);
+    (void)_r;
 
     gc_init_stack_bounds();
 

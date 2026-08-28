@@ -349,8 +349,9 @@ static int cmd_run(int argc, char **argv) {
         fprintf(stderr, "பிழை TA6002: தற்காலிக அடைவு உருவாக்க முடியவில்லை\n");
         return 1;
     }
-    char exe[512];
-    snprintf(exe, sizeof(exe), "%s/program", dir);
+    size_t exelen = strlen(dir) + 16;
+    char *exe = ta_xmalloc(exelen);
+    snprintf(exe, exelen, "%s/program", dir);
     int rc = cmd_build_to(argc, argv, exe, false);
     if (rc == 0) {
         fflush(stdout);
@@ -366,13 +367,17 @@ static int cmd_run(int argc, char **argv) {
         else if (WIFSIGNALED(st))
             rc = 128 + WTERMSIG(st);
     }
-    char asmpath[600];
-    snprintf(asmpath, sizeof(asmpath), "%s.s", exe);
-    char cpath[600];
-    snprintf(cpath, sizeof(cpath), "%s.c", exe);
+    size_t alen = strlen(exe) + 4;
+    char *asmpath = ta_xmalloc(alen);
+    snprintf(asmpath, alen, "%s.s", exe);
+    char *cpath = ta_xmalloc(alen);
+    snprintf(cpath, alen, "%s.c", exe);
     unlink(exe);
     unlink(asmpath);
     unlink(cpath);
+    free(cpath);
+    free(asmpath);
+    free(exe);
     rmdir(dir);
     return rc;
 }
@@ -435,13 +440,16 @@ static int cmd_repl(const char *argv0) {
     printf("தமிழி v%s — :உதவி ஐப் பாருங்கள்; வெளியேற: :வெளியேறு\n", TA_VERSION);
     TaStrBuf buf;
     ta_sb_init(&buf);
-    char line[4096];
+    char *line = NULL;
+    size_t line_cap = 0;
+    ssize_t nread;
 
     for (;;) {
         printf("ta» ");
         fflush(stdout);
-        if (!fgets(line, sizeof(line), stdin)) break;
-        size_t ll = strlen(line);
+        nread = getline(&line, &line_cap, stdin);
+        if (nread == -1) break;
+        size_t ll = (size_t)nread;
         while (ll && (line[ll - 1] == '\n' || line[ll - 1] == '\r')) line[--ll] = 0;
 
         if (strcmp(line, ":வெளியேறு") == 0 || strcmp(line, ":quit") == 0 ||
@@ -486,9 +494,12 @@ static int cmd_repl(const char *argv0) {
             ta_sb_free(&asm_sb);
             continue;
         }
-        char exe[512], asmp[600];
-        snprintf(exe, sizeof(exe), "%s/prog", dir);
-        snprintf(asmp, sizeof(asmp), "%s.s", exe);
+        size_t exelen = strlen(dir) + 16;
+        char *exe = ta_xmalloc(exelen);
+        snprintf(exe, exelen, "%s/prog", dir);
+        size_t alen = strlen(exe) + 4;
+        char *asmp = ta_xmalloc(alen);
+        snprintf(asmp, alen, "%s.s", exe);
         ta_write_file(asmp, asm_sb.data, asm_sb.len);
         char *obj = find_runtime_obj(argv0);
         if (!obj) {
@@ -496,6 +507,8 @@ static int cmd_repl(const char *argv0) {
             free(snapshot);
             ta_sb_free(&asm_sb);
             unlink(asmp);
+            free(asmp);
+            free(exe);
             rmdir(dir);
             continue;
         }
@@ -522,8 +535,11 @@ static int cmd_repl(const char *argv0) {
         ta_sb_free(&asm_sb);
         unlink(exe);
         unlink(asmp);
+        free(asmp);
+        free(exe);
         rmdir(dir);
     }
+    free(line);
     ta_sb_free(&buf);
     printf("\nவணக்கம்!\n");
     return 0;
@@ -729,40 +745,42 @@ static int cmd_check_fonts(void) {
     return 0;
 }
 
-/* Locate a bundled helper script (tools/<name>) relative to the exe. */
+/* Locate a bundled helper script (tools/<name>) relative to the exe.
+   Returns heap-allocated string (caller must free). Thread-safe: no static buffer. */
 static char *find_helper(const char *name) {
-    static char path[2048];
     char exe[1024];
+    char probe[2048];
     ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
     if (n > 0) {
         exe[n] = 0;
         char *slash = strrchr(exe, '/');
         if (slash) {
             *slash = 0;
-            snprintf(path, sizeof(path), "%s/../tools/%s", exe, name);
-            if (access(path, X_OK) == 0) return path;
-            snprintf(path, sizeof(path), "%s/../%s", exe, name);
-            if (access(path, X_OK) == 0) return path;
+            snprintf(probe, sizeof(probe), "%s/../tools/%s", exe, name);
+            if (access(probe, X_OK) == 0) return ta_xstrdup(probe);
+            snprintf(probe, sizeof(probe), "%s/../%s", exe, name);
+            if (access(probe, X_OK) == 0) return ta_xstrdup(probe);
         }
     }
     const char *env = getenv("TA_TOOLS");
     if (env) {
-        snprintf(path, sizeof(path), "%s/%s", env, name);
-        if (access(path, X_OK) == 0) return path;
+        snprintf(probe, sizeof(probe), "%s/%s", env, name);
+        if (access(probe, X_OK) == 0) return ta_xstrdup(probe);
     }
-    snprintf(path, sizeof(path), "tools/%s", name);
-    return path;
+    snprintf(probe, sizeof(probe), "tools/%s", name);
+    return ta_xstrdup(probe);
 }
 
 /* install-fonts: run the bundled Tamil font installer                  */
 static int cmd_install_fonts(void) {
-    const char *script = find_helper("install-tamil-fonts.sh");
+    char *script = find_helper("install-tamil-fonts.sh");
     printf("நிறுவி உருவாக்கம்: %s\n", script);
     char cmd[2176];
     snprintf(cmd, sizeof(cmd), "\"%s\"", script);
     int rc = system(cmd);
     if (rc != 0)
         fprintf(stderr, "எழுத்துரு நிறுவல் தோல்வி (நிலை %d). நிர்வாகி உரிமை தேவையாக இருக்கலாம்.\n", rc);
+    free(script);
     return rc ? 1 : 0;
 }
 

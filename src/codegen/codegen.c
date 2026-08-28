@@ -641,6 +641,12 @@ bool ta_codegen_emit(TaIrUnit *unit, TaStrBuf *out_asm) {
         ta_sb_puts(out_asm, ".section .text\n");
     }
 
+    /* Mark the stack non-executable so the linker doesn't warn/default to an
+       executable stack (GNU/Linux convention: absence of this note means
+       "assume executable", which is both noisy and a security hardening
+       regression for every binary this compiler produces). */
+    ta_sb_puts(out_asm, ".section .note.GNU-stack,\"\",@progbits\n");
+
     free(c.fpool);
     free(c.fbits);
     (void)rt_all_float_args_fwd;
